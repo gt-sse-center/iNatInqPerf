@@ -1,6 +1,6 @@
 [project]
 name = "inatinqperf"
-version = "0.0.0" 
+version = "0.0.1" 
 #          ^^^^^
 # Wheel names will be generated according to this value. Do not manually modify this value; instead
 # update it according to committed changes by running this command from the root of the repository:
@@ -13,7 +13,9 @@ authors = [
     { name = "Ketan Bhardwaj", email = "ketanbj@cc.gatech.edu" }
 ]
 requires-python = ">= 3.10"
-dependencies = []
+dependencies = [
+    "pytest>=8.4.2",
+]
 classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
@@ -29,9 +31,9 @@ classifiers = [
 text = "MIT"
 
 [project.urls]
-Homepage = "https://github.com/gt-sse-center/iNatInqPerf/gt-sse-center/iNatInqPerf"
-Documentation = "https://github.com/gt-sse-center/iNatInqPerf/gt-sse-center/iNatInqPerf"
-Repository = "https://github.com/gt-sse-center/iNatInqPerf/gt-sse-center/iNatInqPerf"
+Homepage = "https://github.com/gt-sse-center/iNatInqPerf"
+Documentation = "https://github.com/gt-sse-center/iNatInqPerf"
+Repository = "https://github.com/gt-sse-center/iNatInqPerf"
 
 [build-system]
 requires = ["hatchling"]
@@ -44,10 +46,34 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.13.0",
+    "numpy>=1.23,<2.0",
+    "pandas>=1.5,<2.3",
+    "tqdm>=4.66",
+    "pillow>=9.5",
+    "psutil>=5.9",
+    "datasets>=2.14,<3.0",
+    "huggingface-hub>=0.23",
+    "safetensors>=0.4",
+    "transformers>=4.35,<4.42",
+    "torch>=2.0,<2.3",
+    "torchvision>=0.15,<0.19",
+    "faiss-cpu>=1.7.4",
+    "pyyaml>=6.0",
+    "codetiming>=1.4",
+    "requests>=2.31",
+    "py-spy"
 ]
 
 [tool.pytest.ini_options]
 addopts = "--verbose -vv --capture=no --cov=inatinqperf --cov-report html --cov-report term --cov-report xml:coverage.xml --cov-fail-under=95.0"
+
+[tool.scripts]
+download = "python src/bench/bench.py download"
+embed = "python src/bench/bench.py embed"
+build = "python src/bench/bench.py build"
+search = "python src/bench/bench.py search"
+update = "python src/bench/bench.py update"
+run-all = "python src/bench/bench.py run-all --size small --backend faiss.flat"
 
 [tool.ruff]
 line-length = 110

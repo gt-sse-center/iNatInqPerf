@@ -1,0 +1,22 @@
+# Changes here will be overwritten by Copier; DO NOT MODIFY THIS FILE DIRECTLY!
+#
+# This file was generated using copier (https://copier.readthedocs.io/) with the
+# template copier-UvScaffolding (https://github.com/gt-sse-center/copier-UvScaffolding).
+# Additional information (including instructions on how to use this template with copier) is
+# available at https://github.com/gt-sse-center/copier-UvScaffolding.
+#
+
+_commit: v0.3.4
+_src_path: .
+author_email: ketanbj@cc.gatech.edu
+author_name: GT CSSE
+coverage_badge_gist_id: 521b537b3503957227f91dfb3db59065
+coverage_badge_gist_username: ketanbj
+github_host: https://github.com/gt-sse-center/iNatInqPerf
+github_repo_name: iNatInqPerf
+github_username: gt-sse-center
+license: MIT
+project_name: iNatInqPerf
+python_package_name: inatinqperf
+python_versions: 3.10, 3.11, 3.12, 3.13
+sign_artifacts_question: false

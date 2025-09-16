@@ -113,7 +113,7 @@ def test_faiss_ivfpq_l2_metric_delete_and_drop(ivfpq_trainset, small_data):
     be.upsert(ids, X)
 
     # Search with L2 metric; still expect small_data ids to appear
-    Q=np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32")
+    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32")
     # Increase nprobe to improve recall; ANN may otherwise return fewer than topk hits (filled with -1)
     D, I = be.search(Q, topk=3, nprobe=64)
     assert D.shape == (2, 3)
@@ -240,12 +240,15 @@ def test_faiss_ivfpq_empty_delete_noop(ivfpq_trainset, small_data):
 
 def test_unwrap_fallback_dummy_chain():
     """Exercise the fallback path in _unwrap_to_ivf by walking .index chain without faiss.extract_index_ivf."""
+
     class Leaf:
         def __init__(self):
             self.nlist = 5
+
     class Wrapper:
         def __init__(self, inner):
             self.index = inner
+
     base = Wrapper(Wrapper(Leaf()))
     out = fb_mod._unwrap_to_ivf(base)
     assert out is not None and hasattr(out, "nlist") and out.nlist == 5
@@ -254,6 +257,7 @@ def test_unwrap_fallback_dummy_chain():
 def test_metric_to_faiss_ip_mapping():
     # Cover the 'ip' branch explicitly
     assert fb_mod._metric_to_faiss("ip") == fb_mod.faiss.METRIC_INNER_PRODUCT
+
 
 ## The following test needs to be debugged
 # def test_faiss_ivfpq_reduces_nlist_and_clamps_nprobe(small_data):

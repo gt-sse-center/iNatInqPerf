@@ -99,6 +99,9 @@ ignore = [
     "TRY002", # Create your own exception
     "TRY300", # Consider moving this statement to an `else` block
     "UP032", # Use f-string instead of `format` call
+    "T201", # Use of print
+    "INP001", # empty __init__.py file
+    "ARG002", # some args needed because of adaptor base class
 ]
 
 [tool.ruff.lint.mccabe]

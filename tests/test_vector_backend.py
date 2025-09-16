@@ -18,7 +18,9 @@ def test_partial_implementation_rejected():
     # Missing required abstract methods -> still abstract
     class Partial(VectorBackend):
         name = "partial"
+
         def init(self, dim: int, metric: str, **params): ...
+
         # upsert/search/stats/drop/delete not implemented
 
     with pytest.raises(TypeError):
@@ -30,13 +32,14 @@ class DummyBackend(VectorBackend):
     A minimal concrete backend for exercising the VectorBackend contract.
     Implements brute-force search in-memory to validate shapes & lifecycle.
     """
+
     name = "dummy"
 
     def __init__(self):
         self._dim = None
         self._metric = None
-        self._X = None           # ndarray [N, D]
-        self._ids = None         # ndarray [N]
+        self._X = None  # ndarray [N, D]
+        self._ids = None  # ndarray [N]
         self._dropped = False
 
     def init(self, dim: int, metric: str, **params):
@@ -79,7 +82,7 @@ class DummyBackend(VectorBackend):
         assert Q.shape[1] == self._X.shape[1]
         sims = self._sim(Q.astype("float32"), self._X)
         # argsort descending (higher score = better)
-        idx = np.argpartition(-sims, kth=min(topk-1, sims.shape[1]-1), axis=1)[:, :topk]
+        idx = np.argpartition(-sims, kth=min(topk - 1, sims.shape[1] - 1), axis=1)[:, :topk]
         # sort each row fully
         row_indices = np.arange(Q.shape[0])[:, None]
         top_scores = sims[row_indices, idx]
@@ -112,12 +115,15 @@ class DummyBackend(VectorBackend):
 @pytest.fixture()
 def tiny_dataset():
     # 4 points in 2D, easy to reason about
-    X = np.array([
-        [1.0, 0.0],  # id 10
-        [0.0, 1.0],  # id 11
-        [1.0, 1.0],  # id 12
-        [-1.0, 0.0], # id 13
-    ], dtype="float32")
+    X = np.array(
+        [
+            [1.0, 0.0],  # id 10
+            [0.0, 1.0],  # id 11
+            [1.0, 1.0],  # id 12
+            [-1.0, 0.0],  # id 13
+        ],
+        dtype="float32",
+    )
     ids = np.array([10, 11, 12, 13], dtype="int64")
     return ids, X
 

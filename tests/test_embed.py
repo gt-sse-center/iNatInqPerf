@@ -71,13 +71,13 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
     class FakeDataset(list):
         def __getitem__(self, i):
             return super().__getitem__(i)
-    ds = FakeDataset([
-        {"image": Image.new("RGB", (8, 8), color=(i, i, i)), "label": i}
-        for i in range(4)
-    ])
+
+    ds = FakeDataset([{"image": Image.new("RGB", (8, 8), color=(i, i, i)), "label": i} for i in range(4)])
     monkeypatch.setattr(embed, "load_from_disk", lambda path: ds)
     monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
-    monkeypatch.setattr(embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()}))
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+    )
 
     ds_out, X, ids, labels = embed.embed_images("anypath", "dummy-model", batch=2)
     assert ds_out is ds
@@ -94,7 +94,9 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
 
 def test_embed_text(monkeypatch):
     monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
-    monkeypatch.setattr(embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()}))
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+    )
 
     X = embed.embed_text(["hello", "world"], "dummy-model")
     assert isinstance(X, np.ndarray)

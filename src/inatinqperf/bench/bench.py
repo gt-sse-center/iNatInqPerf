@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-"""
-Backend-agnostic benchmark orchestrator.
+"""Backend-agnostic benchmark orchestrator.
 
 Subcommands:
   download  -> HF dataset + optional image export
@@ -10,14 +8,20 @@ Subcommands:
   update    -> upsert/delete small batch and re-search
   run-all   -> download->embed->build(Faiss Flat + chosen backend)->search->update
 """
-import sys, pathlib
-# Ensure project root is on sys.path when running as a script (bench/bench.py)
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-import os, argparse, json, yaml, time, numpy as np
-from typing import Dict, Any, Tuple
+
+import sys
+import pathlib
+import argparse
+import json
+import yaml
+import time
+import numpy as np
 from datasets import load_from_disk
+from pathlib import Path
+from typing import Any
+from collections.abc import Mapping
+import faiss
+
 from utils.profiler import Profiler
 from utils.dataio import load_composite, export_images
 from utils.embed import embed_images, to_hf_dataset, embed_text
@@ -26,31 +30,52 @@ from adaptors.faiss_backend import BACKENDS as FAISS_BACKENDS
 ALL_BACKENDS = {}
 ALL_BACKENDS.update(FAISS_BACKENDS)
 
-def load_cfg(path="src/inatinqperf/configs/bench.yaml"):
-    with open(path, "r") as f: return yaml.safe_load(f)
+# Ensure project root is on sys.path when running as a script (bench/bench.py)
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+SAMPLE_SIZE = 500_000  # max samples for training if needed
+BENCH_CFG = ROOT / "config" / "benchmark.yaml"
 
-def ensure_dir(p): os.makedirs(p, exist_ok=True); return p
 
-def exact_baseline(X: np.ndarray, metric: str):
-    import faiss
-    d = X.shape[1]
-    base = faiss.IndexFlatIP(d) if metric in ("ip","cosine") else faiss.IndexFlatL2(d)
+def load_cfg() -> Mapping[str, Any]:
+    """Load YAML config file."""
+    with Path.open(BENCH_CFG) as f:
+        return yaml.safe_load(f)
+
+
+def ensure_dir(p: Path | str) -> str:
+    """Ensure directory exists."""
+    Path(p).mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def exact_baseline(x: np.ndarray, metric: str) -> faiss.Index:
+    """Exact baseline index using FAISS IndexFlat*."""
+    d = x.shape[1]
+    base = faiss.IndexFlatIP(d) if metric in ("ip", "cosine") else faiss.IndexFlatL2(d)
     index = faiss.IndexIDMap2(base)
-    ids = np.arange(X.shape[0], dtype="int64")
-    index.add_with_ids(X.astype("float32"), ids)
+    ids = np.arange(x.shape[0], dtype="int64")
+    index.add_with_ids(x.astype("float32"), ids)
     return index
 
-def recall_at_k(approx_I, exact_I, k):
-    hits = 0
-    for i in range(approx_I.shape[0]):
-        hits += len(set(approx_I[i,:k]).intersection(set(exact_I[i,:k])))
-    return hits / float(approx_I.shape[0]*k)
 
-def cmd_download(args, cfg):
+def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
+    """Compute recall@K between two sets of indices."""
+    hits = 0
+    for i in range(approx_i.shape[0]):
+        hits += len(set(approx_i[i, :k]).intersection(set(exact_i[i, :k])))
+    return hits / float(approx_i.shape[0] * k)
+
+
+def cmd_download(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+    """Download HF dataset and optionally export images."""
     hf_id = cfg["dataset"]["hf_id"]
     size = args.size
     out_dir = args.out_dir or cfg["dataset"]["out_dir"]
-    export = args.export_images if args.export_images is not None else cfg["dataset"].get("export_images", True)
+    export = (
+        args.export_images if args.export_images is not None else cfg["dataset"].get("export_images", True)
+    )
     split_map = cfg["dataset"]["size_splits"]
     split = split_map.get(size, split_map["small"])
     ensure_dir(out_dir)
@@ -58,26 +83,31 @@ def cmd_download(args, cfg):
         ds = load_composite(hf_id, split)
         ds.save_to_disk(out_dir)
         if export:
-            export_dir = os.path.join(out_dir, "images")
+            export_dir = Path(out_dir) / "images"
             manifest = export_images(ds, export_dir)
             print(f"Exported images to: {export_dir}\nManifest: {manifest}")
     print(f"Saved HF dataset to: {out_dir}")
 
-def cmd_embed(args, cfg):
+
+def cmd_embed(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+    """Compute CLIP embeddings and save HF dataset with 'embedding'."""
     model_id = args.model_id or cfg["embedding"]["model_id"]
     batch = args.batch or int(cfg["embedding"]["batch"])
     raw_dir = args.raw_dir or cfg["dataset"]["out_dir"]
     emb_dir = args.emb_dir or cfg["embedding"]["out_dir"]
     out_hf_dir = cfg["embedding"]["out_hf_dir"]
-    ensure_dir(emb_dir); ensure_dir(out_hf_dir)
+    ensure_dir(emb_dir)
+    ensure_dir(out_hf_dir)
     with Profiler("embed-images"):
-        ds, X, ids, labels = embed_images(raw_dir, model_id, batch)
-        ds2 = to_hf_dataset(X, ids, labels)
+        _, x, ids, labels = embed_images(raw_dir, model_id, batch)
+        ds2 = to_hf_dataset(x, ids, labels)
         ds2.save_to_disk(out_hf_dir)
-        print(f"Embeddings: {X.shape} -> {out_hf_dir}")
+        print(f"Embeddings: {x.shape} -> {out_hf_dir}")
 
-def _init_backend(backend_name: str, dim: int, metric: str, params: Dict[str,Any]):
+
+def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, Any]) -> dict:
     """Instantiate backend and call init(), scrubbing reserved keys from params.
+
     Prevents errors like: TypeError: ... init() got multiple values for keyword 'metric'.
     """
     cls = ALL_BACKENDS[backend_name]
@@ -89,22 +119,30 @@ def _init_backend(backend_name: str, dim: int, metric: str, params: Dict[str,Any
     be.init(dim=dim, metric=metric, **safe_params)
     return be
 
-def cmd_build(args, cfg):
+
+def cmd_build(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+    """Build index for a backend."""
     backend = args.backend
     params = cfg["backends"][backend]
     hf_dir = args.hf_dir or cfg["embedding"]["out_hf_dir"]
     ds = load_from_disk(hf_dir)
-    X = np.stack(ds["embedding"]).astype("float32")
+    x = np.stack(ds["embedding"]).astype("float32")
     metric = params.get("metric", "ip").lower()
-    be = _init_backend(backend, X.shape[1], metric, params)
+    be = _init_backend(backend, x.shape[1], metric, params)
     with Profiler(f"build-{backend}"):
         # training if needed
-        be.train(X if X.shape[0] < 500000 else X[np.random.choice(X.shape[0], 500000, replace=False)])
+        be.train(
+            x
+            if x.shape[0] < SAMPLE_SIZE
+            else x[np.random.default_rng().choice(x.shape[0], SAMPLE_SIZE, replace=False)]
+        )
         ids = np.array(ds["id"], dtype="int64")
-        be.upsert(ids, X)
+        be.upsert(ids, x)
     print("Stats:", be.stats())
 
-def cmd_search(args, cfg):
+
+def cmd_search(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+    """Profile search and compute recall@K vs exact baseline."""
     backend = args.backend
     params = cfg["backends"][backend]
     hf_dir = args.hf_dir or cfg["embedding"]["out_hf_dir"]
@@ -113,61 +151,66 @@ def cmd_search(args, cfg):
     model_id = cfg["embedding"]["model_id"]
 
     ds = load_from_disk(hf_dir)
-    X = np.stack(ds["embedding"]).astype("float32")
+    x = np.stack(ds["embedding"]).astype("float32")
     ids = np.array(ds["id"], dtype="int64")
-    metric = params.get("metric","ip").lower()
+    metric = params.get("metric", "ip").lower()
     # exact baseline
-    base = exact_baseline(X, metric="ip" if metric in ("ip","cosine") else "l2")
+    base = exact_baseline(x, metric="ip" if metric in ("ip", "cosine") else "l2")
     # backend
-    be = _init_backend(backend, X.shape[1], "ip" if metric in ("ip","cosine") else "l2", params)
-    be.train(X if X.shape[0] < 500000 else X[np.random.choice(X.shape[0], 500000, replace=False)])
-    be.upsert(ids, X)
+    be = _init_backend(backend, x.shape[1], "ip" if metric in ("ip", "cosine") else "l2", params)
+    be.train(
+        x
+        if x.shape[0] < SAMPLE_SIZE
+        else x[np.random.default_rng().choice(x.shape[0], SAMPLE_SIZE, replace=False)]
+    )
+    be.upsert(ids, x)
 
-    queries = [q.strip() for q in open(queries_file).read().splitlines() if q.strip()]
-    Q = embed_text(queries, model_id)
+    queries = [q.strip() for q in Path(queries_file).read_text(encoding="utf-8").splitlines() if q.strip()]
+    q = embed_text(queries, model_id)
 
     # search + profile
     with Profiler(f"search-{backend}") as p:
         lat = []
-        D0, I0 = base.search(Q, topk)  # exact
-        for i in range(Q.shape[0]):
+        _, i0 = base.search(q, topk)  # exact
+        for i in range(q.shape[0]):
             t0 = time.perf_counter()
-            D, I = be.search(Q[i:i+1], topk, **params)
-            lat.append((time.perf_counter() - t0)*1000.0)
+            _, _ = be.search(q[i : i + 1], topk, **params)
+            lat.append((time.perf_counter() - t0) * 1000.0)
         p.sample()
     # recall@K (compare last retrieved to baseline per query)
     # For simplicity compute approximate on whole Q at once:
-    D1, I1 = be.search(Q, topk, **params)
-    rec = recall_at_k(I1, I0, topk)
+    _, i1 = be.search(q, topk, **params)
+    rec = recall_at_k(i1, i0, topk)
     stats = {
-      "backend": backend,
-      "topk": topk,
-      "lat_ms_avg": float(np.mean(lat)),
-      "lat_ms_p50": float(np.percentile(lat, 50)),
-      "lat_ms_p95": float(np.percentile(lat, 95)),
-      "recall@k": rec,
-      "ntotal": int(X.shape[0]),
+        "backend": backend,
+        "topk": topk,
+        "lat_ms_avg": float(np.mean(lat)),
+        "lat_ms_p50": float(np.percentile(lat, 50)),
+        "lat_ms_p95": float(np.percentile(lat, 95)),
+        "recall@k": rec,
+        "ntotal": int(x.shape[0]),
     }
     print(json.dumps(stats, indent=2))
 
-def cmd_update(args, cfg):
+
+def cmd_update(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+    """Upsert + delete small batch and re-search."""
     backend = args.backend
     params = cfg["backends"][backend]
     hf_dir = args.hf_dir or cfg["embedding"]["out_hf_dir"]
     add_n = int(args.add or cfg["update"]["add_count"])
     del_n = int(args.delete or cfg["update"]["delete_count"])
-    model_id = cfg["embedding"]["model_id"]
 
     ds = load_from_disk(hf_dir)
-    X = np.stack(ds["embedding"]).astype("float32")
+    x = np.stack(ds["embedding"]).astype("float32")
     ids = np.array(ds["id"], dtype="int64")
-    be = _init_backend(backend, X.shape[1], "ip", params)
-    be.train(X[: min(500000, len(X))])
-    be.upsert(ids, X)
+    be = _init_backend(backend, x.shape[1], "ip", params)
+    be.train(x[: min(500000, len(x))])
+    be.upsert(ids, x)
 
     # craft new vectors by slight noise around existing (simulating fresh writes)
     rng = np.random.default_rng(42)
-    add_vecs = X[:add_n].copy()
+    add_vecs = x[:add_n].copy()
     add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype("float32")
     add_vecs /= np.linalg.norm(add_vecs, axis=1, keepdims=True) + 1e-9
     add_ids = np.arange(10_000_000, 10_000_000 + add_n, dtype="int64")
@@ -181,9 +224,14 @@ def cmd_update(args, cfg):
 
     print("Update complete.", be.stats())
 
-def cmd_run_all(args, cfg):
+
+def cmd_run_all(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+    """Run end-to-end benchmark with all steps."""
+
     # minimal run for small dataset
-    class A: pass
+    class A:
+        pass
+
     a = A()
     a.size = args.size or "small"
     a.out_dir = cfg["dataset"]["out_dir"]
@@ -191,29 +239,41 @@ def cmd_run_all(args, cfg):
     cmd_download(a, cfg)
 
     b = A()
-    b.model_id = cfg["embedding"]["model_id"]; b.batch = int(cfg["embedding"]["batch"])
-    b.raw_dir = cfg["dataset"]["out_dir"]; b.emb_dir = cfg["embedding"]["out_dir"]
+    b.model_id = cfg["embedding"]["model_id"]
+    b.batch = int(cfg["embedding"]["batch"])
+    b.raw_dir = cfg["dataset"]["out_dir"]
+    b.emb_dir = cfg["embedding"]["out_dir"]
     cmd_embed(b, cfg)
 
     # Build FAISS Flat baseline then chosen backend
     for backend in ["faiss.flat", args.backend or "faiss.ivfpq"]:
-        c = A(); c.backend = backend; c.hf_dir = cfg["embedding"]["out_hf_dir"]
+        c = A()
+        c.backend = backend
+        c.hf_dir = cfg["embedding"]["out_hf_dir"]
         cmd_build(c, cfg)
 
-    d = A(); d.backend = args.backend or "faiss.ivfpq"; d.hf_dir = cfg["embedding"]["out_hf_dir"]
-    d.topk = 10; d.queries = cfg["search"]["queries_file"]
+    d = A()
+    d.backend = args.backend or "faiss.ivfpq"
+    d.hf_dir = cfg["embedding"]["out_hf_dir"]
+    d.topk = 10
+    d.queries = cfg["search"]["queries_file"]
     cmd_search(d, cfg)
 
-    e = A(); e.backend = args.backend or "faiss.ivfpq"; e.hf_dir = cfg["embedding"]["out_hf_dir"]
-    e.add = None; e.delete = None
+    e = A()
+    e.backend = args.backend or "faiss.ivfpq"
+    e.hf_dir = cfg["embedding"]["out_hf_dir"]
+    e.add = None
+    e.delete = None
     cmd_update(e, cfg)
 
-def main():
+
+def main() -> None:
+    """Entry point."""
     p = argparse.ArgumentParser(description="VectorDB-agnostic benchmark")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("download", help="Download HF dataset and optionally export images")
-    sp.add_argument("--size", choices=["small","large","xlarge","xxlarge"], default="small")
+    sp.add_argument("--size", choices=["small", "large", "xlarge", "xxlarge"], default="small")
     sp.add_argument("--out_dir", default=None)
     sp.add_argument("--export-images", action="store_true")
     sp.add_argument("--no-export-images", dest="export_images", action="store_false")
@@ -245,7 +305,9 @@ def main():
     sp.add_argument("--delete", type=int, default=None)
     sp.set_defaults(func=cmd_update)
 
-    sp = sub.add_parser("run-all", help="Run small end-to-end: download -> embed -> build -> search -> update")
+    sp = sub.add_parser(
+        "run-all", help="Run small end-to-end: download -> embed -> build -> search -> update"
+    )
     sp.add_argument("--size", default="small")
     sp.add_argument("--backend", default="faiss.ivfpq")
     sp.set_defaults(func=cmd_run_all)
@@ -253,6 +315,7 @@ def main():
     args = p.parse_args()
     cfg = load_cfg()
     args.func(args, cfg)
+
 
 if __name__ == "__main__":
     main()

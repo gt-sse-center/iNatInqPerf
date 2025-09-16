@@ -1,46 +1,65 @@
-import os, math, numpy as np, faiss
-from typing import Dict, Any, Tuple, Sequence
+"""FAISS vector database backend adaptor."""
+
+import numpy as np
+import faiss
+from typing import Any
+from collections.abc import Sequence
 from .base import VectorBackend
 
-def _metric_to_faiss(metric: str):
-    return faiss.METRIC_INNER_PRODUCT if metric.lower() in ("ip","cosine") else faiss.METRIC_L2
+
+def _metric_to_faiss(metric: str) -> int:
+    """Convert metric string to FAISS metric type."""
+    return faiss.METRIC_INNER_PRODUCT if metric.lower() in ("ip", "cosine") else faiss.METRIC_L2
+
 
 class FaissFlat(VectorBackend):
+    """FAISS Flat index backend."""
+
     name = "faiss.flat"
-    def __init__(self):
+
+    def __init__(self) -> None:
+        """Initialize FAISS Flat index."""
         self.index = None
         self.metric = "ip"
         self.dim = None
 
-    def init(self, dim: int, metric: str, **params):
+    def init(self, dim: int, metric: str, **params) -> None:
+        """Initialize FAISS Flat index."""
         self.dim = dim
         self.metric = metric.lower()
-        base = faiss.IndexFlatIP(dim) if self.metric in ("ip","cosine") else faiss.IndexFlatL2(dim)
+        base = faiss.IndexFlatIP(dim) if self.metric in ("ip", "cosine") else faiss.IndexFlatL2(dim)
         self.index = faiss.IndexIDMap2(base)
 
-    def train(self, X_train: np.ndarray):  # not needed
-        return
+    def train(self, x_train: np.ndarray) -> None:
+        """Train the index with given vectors. No-op for Flat index."""
 
-    def upsert(self, ids: np.ndarray, X: np.ndarray):
+    def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
+        """Upsert vectors with given IDs."""
         self.index.remove_ids(faiss.IDSelectorArray(ids.astype("int64")))
-        self.index.add_with_ids(X.astype("float32"), ids.astype("int64"))
+        self.index.add_with_ids(x.astype("float32"), ids.astype("int64"))
 
-    def delete(self, ids: Sequence[int]):
+    def delete(self, ids: Sequence[int]) -> None:
+        """Delete vectors with given IDs."""
         arr = np.asarray(list(ids), dtype="int64")
         self.index.remove_ids(faiss.IDSelectorArray(arr))
 
-    def search(self, Q: np.ndarray, topk: int, **kwargs) -> Tuple[np.ndarray,np.ndarray]:
-        return self.index.search(Q.astype("float32"), topk)
+    def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:
+        """Search for top-k nearest neighbors."""
+        kwargs.pop("nprobe", None)  # not used
+        return self.index.search(q.astype("float32"), topk)
 
-    def stats(self) -> Dict[str,Any]:
-        return {"ntotal": int(self.index.ntotal), "kind":"flat", "metric": self.metric}
+    def stats(self) -> dict[str, Any]:
+        """Return index statistics."""
+        return {"ntotal": int(self.index.ntotal), "kind": "flat", "metric": self.metric}
 
-    def drop(self): self.index = None
+    def drop(self) -> None:
+        """Drop the index."""
+        self.index = None
 
 
-def _unwrap_to_ivf(base):
-    """
-    Return the IVF index inside a composite FAISS index, or None if not found.
+def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
+    """Return the IVF index inside a composite FAISS index, or None if not found.
+
     Works across FAISS builds with/without extract_index_ivf.
     """
     # Try the official helper first
@@ -50,20 +69,27 @@ def _unwrap_to_ivf(base):
             if ivf is not None:
                 return ivf
         except Exception:
-            pass
+            print("[FAISS] Warning: extract_index_ivf failed")
+
     # Fallback: walk .index fields until we find .nlist
     node = base
     visited = 0
-    while node is not None and visited < 5:
+    five = 5
+    while node is not None and visited < five:
         if hasattr(node, "nlist"):  # IVF layer
             return node
         node = getattr(node, "index", None)
         visited += 1
     return None
 
+
 class FaissIVFPQ(VectorBackend):
+    """FAISS IVF-PQ index backend."""
+
     name = "faiss.ivfpq"
-    def __init__(self):
+
+    def __init__(self) -> None:
+        """Initialize FAISS IVF-PQ index."""
         self.index = None
         self.metric = "ip"
         self.dim = None
@@ -71,7 +97,8 @@ class FaissIVFPQ(VectorBackend):
         self.m = 64
         self.nbits = 8
 
-    def init(self, dim: int, metric: str, **params):
+    def init(self, dim: int, metric: str, **params) -> None:
+        """Initialize FAISS IVF-PQ index."""
         self.dim = dim
         self.metric = metric.lower()
         nlist = int(params.get("nlist", 32768))
@@ -85,9 +112,10 @@ class FaissIVFPQ(VectorBackend):
         base = faiss.index_factory(dim, desc, metric_type)
         self.index = faiss.IndexIDMap2(base)
 
-    def train(self, X_train: np.ndarray):
-        X_train = X_train.astype("float32", copy=False)
-        n = int(X_train.shape[0])
+    def train(self, x_train: np.ndarray) -> None:
+        """Train the index with given vectors."""
+        x_train = x_train.astype("float32", copy=False)
+        n = int(x_train.shape[0])
 
         # If dataset is smaller than nlist, rebuild with reduced nlist
         ivf = _unwrap_to_ivf(self.index.index)
@@ -96,13 +124,19 @@ class FaissIVFPQ(VectorBackend):
             effective_nlist = max(1, min(current_nlist, n))
             if effective_nlist != current_nlist:
                 # Recreate with smaller nlist to avoid training failures
-                self.init(self.dim, self.metric,
-                          nlist=effective_nlist, m=self.m, nbits=self.nbits, nprobe=self.nprobe)
+                self.init(
+                    self.dim,
+                    self.metric,
+                    nlist=effective_nlist,
+                    m=self.m,
+                    nbits=self.nbits,
+                    nprobe=self.nprobe,
+                )
                 ivf = _unwrap_to_ivf(self.index.index)
 
         # Train if needed
         if self.index is not None and not self.index.is_trained:
-            self.index.train(X_train)
+            self.index.train(x_train)
 
         # Set nprobe (if we have IVF)
         ivf = _unwrap_to_ivf(self.index.index)
@@ -111,23 +145,27 @@ class FaissIVFPQ(VectorBackend):
             nlist = int(getattr(ivf, "nlist", max(1, self.nprobe)))
             ivf.nprobe = min(self.nprobe, max(1, nlist))
 
-    def upsert(self, ids: np.ndarray, X: np.ndarray):
+    def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
+        """Upsert vectors with given IDs."""
         self.index.remove_ids(faiss.IDSelectorArray(ids.astype("int64")))
-        self.index.add_with_ids(X.astype("float32"), ids.astype("int64"))
+        self.index.add_with_ids(x.astype("float32"), ids.astype("int64"))
 
-    def delete(self, ids: Sequence[int]):
+    def delete(self, ids: Sequence[int]) -> None:
+        """Delete vectors with given IDs."""
         arr = np.asarray(list(ids), dtype="int64")
         self.index.remove_ids(faiss.IDSelectorArray(arr))
 
-    def search(self, Q: np.ndarray, topk: int, **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-        Q = Q.astype("float32", copy=False)
+    def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:
+        """Search for top-k nearest neighbors. Supports runtime nprobe override."""
+        q = q.astype("float32", copy=False)
         # Runtime override for nprobe
         ivf = _unwrap_to_ivf(self.index.index)
         if ivf is not None and hasattr(ivf, "nprobe"):
             ivf.nprobe = int(kwargs.get("nprobe", self.nprobe))
-        return self.index.search(Q, topk)
+        return self.index.search(q, topk)
 
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
+        """Return index statistics."""
         ivf = _unwrap_to_ivf(self.index.index) if self.index is not None else None
         return {
             "ntotal": int(self.index.ntotal) if self.index is not None else 0,
@@ -136,11 +174,13 @@ class FaissIVFPQ(VectorBackend):
             "nlist": int(getattr(ivf, "nlist", -1)) if ivf is not None else None,
             "nprobe": int(getattr(ivf, "nprobe", -1)) if ivf is not None else None,
         }
-    
-    def drop(self): self.index = None
+
+    def drop(self) -> None:
+        """Drop the index."""
+        self.index = None
 
 
 BACKENDS = {
-  "faiss.flat": FaissFlat,
-  "faiss.ivfpq": FaissIVFPQ,
+    "faiss.flat": FaissFlat,
+    "faiss.ivfpq": FaissIVFPQ,
 }

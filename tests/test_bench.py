@@ -92,10 +92,12 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
         "embed_images",
         lambda raw_dir, model_id, batch: ([], np.ones((3, 4), dtype="float32"), [0, 1, 2], [0, 1, 2]),
     )
+
     # Stub to_hf_dataset -> save_to_disk
     class HFSaver:
         def save_to_disk(self, path):
             (tmp_path / "emb.flag").write_text("ok")
+
     monkeypatch.setattr(bench, "to_hf_dataset", lambda X, ids, labels: HFSaver())
 
     cfg = {
@@ -105,7 +107,7 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
             "batch": 2,
             "out_dir": str(tmp_path),
             "out_hf_dir": str(tmp_path),
-        }
+        },
     }
     args = types.SimpleNamespace(model_id=None, batch=None, raw_dir=None, emb_dir=None)
 
@@ -142,7 +144,9 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, capsys):
                 I = np.tile(np.arange(k), (n, 1))
                 D = np.zeros_like(I, dtype="float32")
                 return D, I
+
         return _Exact()
+
     monkeypatch.setattr(bench, "exact_baseline", _fake_exact_baseline)
 
     qfile = tmp_path / "queries.txt"
@@ -232,6 +236,7 @@ def test_load_cfg_and_ensure_dir_error_and_idempotency(tmp_path):
 # ===============================
 class CaptureBE(DummyBE):
     """Used to verify _init_backend scrubs reserved keys."""
+
     pass
 
 
@@ -312,8 +317,10 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
 class LazyEmbeds:
     def __init__(self, n, d):
         self.n, self.d = n, d
+
     def __len__(self):
         return self.n
+
     def __getitem__(self, i):
         # Return a tiny array on demand, avoiding storing 500k items
         return np.ones(self.d, dtype="float32")
@@ -322,8 +329,10 @@ class LazyEmbeds:
 class LazyIds:
     def __init__(self, n):
         self.n = n
+
     def __len__(self):
         return self.n
+
     def __getitem__(self, i):
         return i
 

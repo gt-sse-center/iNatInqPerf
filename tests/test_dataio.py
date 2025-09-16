@@ -15,6 +15,7 @@ from inatinqperf.utils.dataio import load_composite, export_images
 # ----------------------------
 class FakeDataset(list):
     """Minimal stand-in for `datasets.Dataset` that supports iteration and indexing."""
+
     # In these tests we only iterate; no extra API needed.
     pass
 
@@ -33,6 +34,7 @@ def fake_load_dataset(monkeypatch):
         return FakeDataset([{"split": split}])
 
     import inatinqperf.utils.dataio as dataio
+
     monkeypatch.setattr(dataio, "load_dataset", _load, raising=True)
     return calls
 
@@ -40,6 +42,7 @@ def fake_load_dataset(monkeypatch):
 @pytest.fixture
 def fake_concatenate(monkeypatch):
     """Monkeypatch `datasets.concatenate_datasets` to simply join lists."""
+
     def _concat(parts):
         # confirm it's getting a list-like
         out = FakeDataset()
@@ -50,6 +53,7 @@ def fake_concatenate(monkeypatch):
         return out
 
     import inatinqperf.utils.dataio as dataio
+
     monkeypatch.setattr(dataio, "concatenate_datasets", _concat, raising=True)
 
 
@@ -58,7 +62,10 @@ def fake_concatenate(monkeypatch):
 # ----------------------------
 def test_load_composite_concatenates_on_plus_expression(fake_load_dataset, fake_concatenate, monkeypatch):
     import inatinqperf.utils.dataio as dataio
-    monkeypatch.setattr(dataio, "load_dataset", lambda hf_id, split: FakeDataset([{ "split": split }]), raising=True)
+
+    monkeypatch.setattr(
+        dataio, "load_dataset", lambda hf_id, split: FakeDataset([{"split": split}]), raising=True
+    )
 
     # Expression with spaces; one missing/empty chunk should be ignored
     ds = load_composite("hf/some-id", "train[:5] + validation[:3] + ")
@@ -70,11 +77,15 @@ def test_load_composite_concatenates_on_plus_expression(fake_load_dataset, fake_
     assert set(row["split"] for row in ds) == {"train[:5]", "validation[:3]"}
 
 
-
 def test_load_composite_single_part_returns_dataset(fake_load_dataset, monkeypatch):
     import inatinqperf.utils.dataio as dataio
-    monkeypatch.setattr(dataio, "load_dataset", lambda hf_id, split: FakeDataset([{ "split": split }]), raising=True)
-    monkeypatch.setattr(dataio, "concatenate_datasets", lambda _: (_ for _ in ()).throw(AssertionError), raising=True)
+
+    monkeypatch.setattr(
+        dataio, "load_dataset", lambda hf_id, split: FakeDataset([{"split": split}]), raising=True
+    )
+    monkeypatch.setattr(
+        dataio, "concatenate_datasets", lambda _: (_ for _ in ()).throw(AssertionError), raising=True
+    )
 
     ds = load_composite("hf/some-id", "train[:2]")
     assert isinstance(ds, FakeDataset)
@@ -91,6 +102,7 @@ def test_load_composite_fallback_to_train_when_all_parts_fail(monkeypatch):
         return FakeDataset([{"split": split}])
 
     import inatinqperf.utils.dataio as dataio
+
     monkeypatch.setattr(dataio, "load_dataset", _load, raising=True)
 
     ds = load_composite("hf/any", "bad + also_bad")
@@ -110,12 +122,14 @@ def test_export_images_writes_jpegs_and_manifest(tmp_path):
     #  - one NumPy array (HxWxC)
     #  - labels in different forms: int and string
     pil_img = Image.new("RGB", (8, 8), color=(10, 20, 30))
-    np_img = (np.ones((8, 8, 3), dtype=np.uint8) * 127)  # gray image
+    np_img = np.ones((8, 8, 3), dtype=np.uint8) * 127  # gray image
 
-    ds = FakeDataset([
-        {"image": pil_img, "label": 7},
-        {"image": np_img, "labels": "butterfly"},
-    ])
+    ds = FakeDataset(
+        [
+            {"image": pil_img, "label": 7},
+            {"image": np_img, "labels": "butterfly"},
+        ]
+    )
 
     export_dir = tmp_path / "images_out"
     manifest_path = export_images(ds, str(export_dir))

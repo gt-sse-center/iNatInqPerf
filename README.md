@@ -1,5 +1,5 @@
 **Project:**
-[![License](https://img.shields.io/github/license/gt-sse-center/iNatInqPerf?color=dark-green)](https://github.com/gt-sse-center/iNatInqPerf/blob/master/LICENSE)
+[![License](https://img.shields.io/github/license/gt-sse-center/iNatInqPerf?color=dark-green)](https://github.com/gt-sse-center/iNatInqPerf/blob/main/LICENSE)
 
 **Package:**
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/inatinqperf?color=dark-green)](https://pypi.org/project/inatinqperf/)

@@ -9,10 +9,10 @@ Additional information is available at the following locations.
 | Security | How to report vulnerabilities in our software. | [SECURITY.md](SECURITY.md) |
 
 # Bug Reports
-If you experience a problem with our software, please visit [issues](https://github.com/gt-sse-center/iNatInqPerf/gt-sse-center/iNatInqPerf/issues) and create a `Bug report`.
+If you experience a problem with our software, please visit [issues](https://github.com/gt-sse-center/iNatInqPerf/issues) and create a `Bug report`.
 
 # Feature Requests
-If you would like to suggest a new feature for our software, please visit [issues](https://github.com/gt-sse-center/iNatInqPerf/gt-sse-center/iNatInqPerf/issues) and create a `Feature request`.
+If you would like to suggest a new feature for our software, please visit [issues](https://github.com/gt-sse-center/iNatInqPerf/issues) and create a `Feature request`.
 
 # Issue Labels
 We use these labels to help us track and manage `Bug reports` and `Feature requests`.

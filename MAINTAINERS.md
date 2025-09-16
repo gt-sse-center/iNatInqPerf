@@ -6,9 +6,10 @@ The following individuals are responsible for maintaining this project. Feel fre
 
 | Maintainer        | GitHub Username   |
 | ----------------- | ----------------- |
-| Alice Smith       | `@alice`          |
-| Bob Johnson       | `@bob`            |
-| Carol Williams    | `@carol`          |
+| Varun Agarwal     | `@varunagrawal`   |
+| Varaun Narayan    | `@varun646`       |
+| Mathieu Tanneau    | `@mtanneau`        |
+| Ketan Bhardwaj    | `@ketanbj`        |
 
 ## Maintainer Responsibilities
 

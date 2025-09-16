@@ -4,7 +4,7 @@
 
 | Step | Command Line | Additional Information |
 | --- | --- | --- |
-| 1. Clone the repository locally. | `git clone https://github.com/gt-sse-center/iNatInqPerf/gt-sse-center/iNatInqPerf` | https://git-scm.com/docs/git-clone |
+| 1. Clone the repository locally. | `git clone https://github.com/gt-sse-center/iNatInqPerf` | https://git-scm.com/docs/git-clone |
 | 2. Install [uv](https://github.com/astral-sh/uv). | `curl -LsSf https://astral.sh/uv/install.sh \| sh` on macOS and Linux or <br/>`powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 \| iex"` on Windows | https://docs.astral.sh |
 | 3. Install dependencies. | `uv sync` | https://docs.astral.sh/uv/concepts/projects/sync |
 | 4. Install [pre-commit](https://pre-commit.com/) hooks | `uv run pre-commit install` | https://pre-commit.com/#1-install-pre-commit |

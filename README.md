@@ -214,6 +214,37 @@ class VectorBackend(ABC):
 3. Add parameters under `backends:` in `configs/bench.yaml`.
 4. Run `build`, `search`, and `update` with `--backend <your.backend>`.
 
+### Testing
+
+Run all tests:
+
+```uv run pytest -q```
+
+Run individual tests:
+
+```uv run pytest -q test\<test_file_name>```
+
+### Adding a New Backend
+
+Each backend adapter implements the `VectorBackend` interface (`adapters/base.py`):
+
+```python
+class VectorBackend(ABC):
+    def init(self, dim: int, metric: str, **params): ...
+    def train(self, X_train: np.ndarray): ...
+    def upsert(self, ids: np.ndarray, X: np.ndarray): ...
+    def search(self, Q: np.ndarray, topk: int, **kwargs): ...
+    def delete(self, ids: Sequence[int]): ...
+    def stats(self) -> Dict[str, Any]: ...
+    def drop(self): ...
+```
+
+#### Steps:
+1. Write an adapter in `adapters/` (e.g., `weaviate_backend.py`).
+2. Register it in `ALL_BACKENDS` in `bench/bench.py`.
+3. Add parameters under `backends:` in `configs/bench.yaml`.
+4. Run `build`, `search`, and `update` with `--backend <your.backend>`.
+
 ## Additional Information
 Additional information can be found at these locations.
 

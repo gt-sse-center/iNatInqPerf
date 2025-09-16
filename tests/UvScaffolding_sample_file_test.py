@@ -9,3 +9,9 @@ def test_Add():
 
 def test_Subtract():
     assert Subtract(1, 2) == -1
+
+
+def test_hello():
+    from inatinqperf import hello
+
+    assert hello() == "Hello from inatinqperf!"

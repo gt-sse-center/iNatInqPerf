@@ -89,14 +89,11 @@ ignore = [
     "COM812", # Trailing comma missing
     "D105", # Missing docstring in magic method
     "D107", # Missing docstring in `__init__` method
-    "D202", # No blank lines allowed after function docstring
     "D203", # Incorrect blank line before class
     "D213", # Multi line summary second line
     "FIX002", # Line contains TODO, consider resolving the issue
-    "I001", # Import block is un-sorted or un-formatted
     "N802", # Function name `xxx` should be lowercase
     "N999", # Invalid module name
-    "RSE102", # Unnecessary parentheses on raise exception
     "S101", # Use of assert detected
     "TC006", # Add quotes to type expression in `typing.cast()`
     "TD002", # Missing author in TODO

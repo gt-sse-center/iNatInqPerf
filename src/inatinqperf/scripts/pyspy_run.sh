@@ -5,7 +5,7 @@ set -euo pipefail
 #   scripts/pyspy_run.sh <output-stem> -- <python command...>
 #
 # Example:
-#   scripts/pyspy_run.sh search-faiss -- python benchmark/benchmark.py search --backend faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries benchmark/queries.txt
+#   scripts/pyspy_run.sh search-faiss -- python benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries benchmark/queries.txt
 
 if [[ $# -lt 3 ]]; then
   echo "Usage: $0 <output-stem> -- <python command...>" >&2

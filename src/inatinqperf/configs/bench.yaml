@@ -1,10 +1,10 @@
 dataset:
   hf_id: beans
   size_splits:
-    small: ["train[:200]"]
-    large: ["train"]
-    xlarge: ["train", "validation", "test"]
-    xxlarge: ["train", "validation", "test"]
+    small: "train[:200]"
+    large: "train"
+    xlarge: "train+validation+test"
+    xxlarge: "train+validation+test"
   out_dir: "data/raw"
   export_images: true
 
@@ -26,7 +26,7 @@ vectordbs:
 
 search:
   topk: 10
-  queries_file: "benchmark/queries.txt"
+  queries_file: "bench/queries.txt"
 
 update:
   add_count: 50

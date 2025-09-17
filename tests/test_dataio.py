@@ -1,17 +1,25 @@
 # tests/test_dataio.py
 import csv
-from typing import Any, List
+from typing import Any, List, Optional
 
 import numpy as np
 import pytest
 from PIL import Image
 
 from inatinqperf.utils import dataio
-from inatinqperf.utils.dataio import load_composite, export_images
+from inatinqperf.utils.dataio import export_images, load_composite
 
 
 class FakeDataset(list):
     """Minimal stand-in for `datasets.Dataset` supporting iteration and indexing."""
+
+    def __init__(self, data: Optional[list[Any]] = None):
+        # Pythonic idiom for list default arg
+        if data is None:
+            data = []
+
+        super().__init__(data)
+        self.concatenated = False
 
 
 @pytest.fixture(name="fake_loader")

@@ -15,6 +15,7 @@
 <!-- Content above this delimiter will be copied to the generated README.md file. DO NOT REMOVE THIS COMMENT, as it will cause regeneration to fail. -->
 
 ## Contents
+
 - [Overview](#overview)
 - [Installation](#installation)
 - [Development](#development)
@@ -22,16 +23,18 @@
 - [License](#license)
 
 ## Overview
+
 This project provides a **modular benchmark pipeline** for experimenting with different vector databases (FAISS, Qdrant, …).  
 It runs end-to-end:
 
 1. **Download** → Hugging Face dataset (optionally export images + manifest)  
 2. **Embed** → Generate CLIP embeddings for images  
-3. **Build** → Construct indexes with multiple VectorDB backends  
+3. **Build** → Construct indexes with multiple VectorDBs  
 4. **Search** → Profile queries (latency + Recall@K vs exact baseline)  
 5. **Update** → Test insertions & deletions (index maintenance)
 
 All steps are run with **uv** as the package manager.
+
 ### How to use `iNatInqPerf`
 
 ```bash
@@ -42,8 +45,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv .venv && source .venv/bin/activate
 uv sync
 
-# Run a small end-to-end benchmark (FAISS IVF+PQ backend)
-uv run python src/inatinqperf/benchmark/benchmark.py run-all --size small --backend faiss.ivfpq
+# Run a small end-to-end benchmark (FAISS IVF+PQ vectordb)
+uv run python src/inatinqperf/benchmark/benchmark.py run-all --size small --vectordb faiss.ivfpq
 ```
 
 ---
@@ -67,12 +70,14 @@ python src/inatinqperf/benchmark/benchmark.py download --size xxlarge --out_dir 
 ```
 
 ### Options
+
 - `--size` : `small`, `large`, `xlarge`, `xxlarge`
 - `--out_dir` : output folder (default: `data/raw`)
 - `--export-images` : save JPEGs + `manifest.csv`
 - `--no-export-images` : keep HF Arrow dataset only
 
 **Output structure:**
+
 ```
 data/raw/
   dataset_info.json
@@ -100,6 +105,7 @@ python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir
 ```
 
 **Outputs:**
+
 - `data/emb/` — temporary embeddings
 - `data/emb_hf/` — HF dataset with `{id, label, embedding}`
 
@@ -107,17 +113,18 @@ python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir
 
 ## Step 3: Build Index
 
-Construct an index on a chosen backend.
+Construct an index on a chosen vectordb.
 
 ```bash
 # FAISS Flat (exact baseline)
-python src/inatinqperf/benchmark/benchmark.py build --backend faiss.flat --hf_dir data/emb_hf
+python src/inatinqperf/benchmark/benchmark.py build --vectordb faiss.flat --hf_dir data/emb_hf
 
 # FAISS IVF+PQ (ANN)
-python src/inatinqperf/benchmark/benchmark.py build --backend faiss.ivfpq --hf_dir data/emb_hf
+python src/inatinqperf/benchmark/benchmark.py build --vectordb faiss.ivfpq --hf_dir data/emb_hf
 ```
 
-**Supported backends:**
+**Supported vectordbs:**
+
 - `faiss.flat` (exact)
 - `faiss.ivfpq` (IVF + OPQ + PQ)
 
@@ -128,10 +135,11 @@ python src/inatinqperf/benchmark/benchmark.py build --backend faiss.ivfpq --hf_d
 Profile query latency and compute Recall@K vs FAISS Flat baseline.
 
 ```bash
-python src/inatinqperf/benchmark/benchmark.py search --backend faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries bench/queries.txt
+python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries bench/queries.txt
 ```
 
 **Outputs:**
+
 - Latency statistics (avg, p50, p95)
 - Recall@K vs baseline
 - JSON metrics in `.results/`
@@ -143,10 +151,11 @@ python src/inatinqperf/benchmark/benchmark.py search --backend faiss.ivfpq --hf_
 Simulate real-time usage: insert (upsert) and delete vectors.
 
 ```bash
-python src/inatinqperf/benchmark/benchmark.py update --backend faiss.ivfpq --hf_dir data/emb_hf
+python src/inatinqperf/benchmark/benchmark.py update --vectordb faiss.ivfpq --hf_dir data/emb_hf
 ```
 
 Configurable counts via `configs/benchmark.yaml`:
+
 ```yaml
 update:
   add_count: 50
@@ -160,17 +169,17 @@ update:
 Use `py-spy` to record flamegraphs during any step:
 
 ```bash
-bash scripts/pyspy_run.sh search-faiss -- python src/inatinqperf/benchmark/benchmark.py search --backend faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries src/inatinqperf/benchmark/queries.txt
+bash scripts/pyspy_run.sh search-faiss -- python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries src/inatinqperf/benchmark/queries.txt
 ```
 
 Outputs:
+
 - `.results/search-faiss.svg` (flamegraph)
 - `.results/search-faiss.speedscope.json`
 
 ---
 
 <!-- Content below this delimiter will be copied to the generated README.md file. DO NOT REMOVE THIS COMMENT, as it will cause regeneration to fail. -->
-
 
 ## Installation
 
@@ -179,12 +188,12 @@ Outputs:
 | Via [uv](https://github.com/astral-sh/uv) | `uv add inatinqperf` |
 | Via [pip](https://pip.pypa.io/en/stable/) | `pip install inatinqperf` |
 
-
-
 ## Development
+
 Please visit [Contributing](https://github.com/gt-sse-center/iNatInqPerf/blob/main/CONTRIBUTING.md) and [Development](https://github.com/gt-sse-center/iNatInqPerf/blob/main/DEVELOPMENT.md) for information on contributing to this project.
 
 ## Additional Information
+
 Additional information can be found at these locations.
 
 | Title | Document | Description |
@@ -197,4 +206,49 @@ Additional information can be found at these locations.
 | Security | [SECURITY.md](https://github.com/gt-sse-center/iNatInqPerf/blob/main/SECURITY.md) | Information about how to privately report security issues associated with this project. |
 
 ## License
+
 `iNatInqPerf` is licensed under the <a href="https://choosealicense.com/licenses/MIT/" target="_blank">MIT</a> license.
+
+
+
+class Metric(enum.Enum):
+    """Enum for metrics used to compute vector similarity.
+
+    More details about FAISS metrics can be found here: https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances
+    """
+
+    INNER_PRODUCT = 0  # maximum inner product search
+    COSINE = 1  # Cosine distance
+    L2 = 2  # Euclidean L2 distance
+
+
+
+def test_cmd_build_triggers_subsample(monkeypatch, tmp_path):
+    # n = 500001  # force X.shape[0] >= 500000 path
+    n = 50
+    d = 2
+    ds = {"embedding": LazyEmbeds(n, d), "id": LazyIds(n)}
+    monkeypatch.setattr(bench, "load_from_disk", lambda p=None: ds)
+
+    cfg = {
+        "embedding": {"out_hf_dir": tmp_path},
+        "vectordbs": {"faiss.flat": {"metric": "ip"}},
+    }
+    vectordb = "faiss.flat"
+    hf_dir = None
+    be = bench.cmd_build(vectordb, hf_dir, cfg)
+    assert be.stats() == {}
+
+
+def _metric_to_faiss(metric: str) -> int:
+    """Convert metric string to FAISS metric type."""
+    return faiss.METRIC_INNER_PRODUCT if metric.lower() in ("ip", "cosine") else faiss.METRIC_L2
+
+
+# _metric_to_faiss: unknown metric falls back to L2
+    assert fb_mod._metric_to_faiss("weird") == fb_mod.faiss.METRIC_L2
+    assert fb_mod._metric_to_faiss("cosine") == fb_mod.faiss.METRIC_INNER_PRODUCT
+    
+def test_metric_to_faiss_ip_mapping():
+    # Cover the 'ip' branch explicitly
+    assert fb_mod._metric_to_faiss("ip") == fb_mod.faiss.METRIC_INNER_PRODUCT

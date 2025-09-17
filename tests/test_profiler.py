@@ -1,5 +1,4 @@
 # tests/test_profiler.py
-
 import json
 import time
 from pathlib import Path

@@ -1,6 +1,8 @@
 """Utilities for embedding images and text using CLIP models."""
 
 from collections.abc import Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -8,8 +10,6 @@ from datasets import Dataset, Features, Value, load_from_disk
 from datasets import Sequence as HFSequence
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
-from pathlib import Path
-from dataclasses import dataclass
 
 _EMBED_MATRIX_NDIM = 2
 

@@ -1,7 +1,7 @@
 """Utilities for data I/O operations."""
 
-from collections.abc import Sequence
 import csv
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np

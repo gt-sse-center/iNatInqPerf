@@ -69,7 +69,7 @@ def test_vector_insertion(
     collection_name: str,
 ):
     """Test insertion of vectors into the database."""
-    num_vectors = 117
+    num_vectors = 117  # Some number of vectors. Not of any significance.
 
     vectors = rng.random((num_vectors, 100))
     points = [
@@ -85,12 +85,13 @@ def test_vector_insertion(
     assert count_result.count == num_vectors
 
 
+@pytest.mark.regression
 def test_search(
     client_with_collection: QdrantClient,
     rng: np.random.Generator,
     collection_name: str,
 ):
-    """Test search capabilities of a tes"""
+    """Test search capabilities of the vector db."""
     vectors = rng.random((101, 100))
     points = [
         PointStruct(id=idx, vector=vector, payload={"color": "red", "rand_number": idx % 10})

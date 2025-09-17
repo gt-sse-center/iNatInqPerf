@@ -2,7 +2,7 @@
 
 from inatinqperf.adaptors.faiss_backend import FaissFlat, FaissIVFPQ
 
-BACKENDS = {
+VECTORDBS = {
     "faiss.flat": FaissFlat,
     "faiss.ivfpq": FaissIVFPQ,
 }

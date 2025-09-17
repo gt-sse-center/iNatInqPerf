@@ -13,9 +13,7 @@ authors = [
     { name = "Ketan Bhardwaj", email = "ketanbj@cc.gatech.edu" }
 ]
 requires-python = ">= 3.10"
-dependencies = [
-    "pytest>=8.4.2",
-]
+
 classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
@@ -58,7 +56,7 @@ dev = [
     "pyyaml>=6.0",
     "codetiming>=1.4",
     "requests>=2.31",
-    "py-spy"
+    "py-spy",
 ]
 
 [tool.pytest.ini_options]

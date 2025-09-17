@@ -66,6 +66,14 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--verbose -vv --capture=no --cov=inatinqperf --cov-report html --cov-report term --cov-report xml:coverage.xml --cov-fail-under=95.0"
 
+[tool.scripts]
+download = "python src/benchmark/benchmark.py download"
+embed = "python src/benchmark/benchmark.py embed"
+build = "python src/benchmark/benchmark.py build"
+search = "python src/benchmark/benchmark.py search"
+update = "python src/benchmark/benchmark.py update"
+run-all = "python src/benchmark/benchmark.py run-all --size small --backend faiss.flat"
+
 [tool.ruff]
 line-length = 110
 

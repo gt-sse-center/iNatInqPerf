@@ -1,11 +1,12 @@
 # tests/test_vector_backend.py
-import math
+import importlib
+
 import numpy as np
 import pytest
 
-# Adjust this import to match your repo path, e.g.:
-# from adaptors.base import VectorBackend
-from inatinqperf.adaptors.base import VectorBackend
+base_module = importlib.import_module("inatinqperf.adaptors.base")
+base = importlib.reload(base_module)
+VectorBackend = base.VectorBackend
 
 
 def test_vectorbackend_is_abstract():

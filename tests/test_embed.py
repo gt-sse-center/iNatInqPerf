@@ -1,10 +1,13 @@
 # tests/test_embed.py
+import importlib
+
 import numpy as np
 import pytest
 from PIL import Image
 import torch
 
-import inatinqperf.utils.embed as embed
+embed_module = importlib.import_module("inatinqperf.utils.embed")
+embed = importlib.reload(embed_module)
 
 
 # -----------------------
@@ -66,6 +69,50 @@ def test_pilify_numpy_and_pil():
     assert out2.mode == "RGB"
 
 
+def test_pilify_invalid_type():
+    with pytest.raises(TypeError):
+        embed.pilify("not-an-image")
+
+
+def test_embed_images_empty_dataset(monkeypatch):
+    monkeypatch.setattr(embed, "load_from_disk", lambda _: [])
+    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+    )
+
+    ds_out, X, ids, labels = embed.embed_images("anypath", "dummy-model", batch=2)
+    assert X.shape[0] == 0
+    assert ids == []
+    assert labels == []
+
+
+def test_embed_images_model_error(monkeypatch):
+    class BrokenModel(DummyModel):
+        def get_image_features(self, **inputs):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(embed, "load_from_disk", lambda _: [{"image": Image.new("RGB", (8, 8)), "label": 0}])
+    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: BrokenModel()}))
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+    )
+
+    with pytest.raises(RuntimeError):
+        embed.embed_images("anypath", "dummy-model", batch=1)
+
+
+def test_to_hf_dataset_structure():
+    X = np.ones((3, 4))
+    ids = [1, 2, 3]
+    labels = ["a", "b", "c"]
+    ds = embed.to_hf_dataset(X, ids, labels)
+    assert set(ds.column_names) == {"id", "label", "embedding"}
+    assert isinstance(ds[0]["embedding"], list)
+    assert ds[0]["id"] == 1
+    assert ds[0]["label"] == "a"
+
+
 def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
     # Fake dataset: two records with images + labels
     class FakeDataset(list):
@@ -101,3 +148,14 @@ def test_embed_text(monkeypatch):
     X = embed.embed_text(["hello", "world"], "dummy-model")
     assert isinstance(X, np.ndarray)
     assert X.shape[0] == 2
+
+
+def test_embed_text_empty(monkeypatch):
+    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+    )
+
+    X = embed.embed_text([], "dummy-model")
+    assert isinstance(X, np.ndarray)
+    assert X.shape[0] == 0

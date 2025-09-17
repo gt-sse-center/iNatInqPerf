@@ -1,9 +1,11 @@
 # tests/test_profiler.py
+import importlib
 import json
 import time
 from pathlib import Path
 
-import inatinqperf.utils.profiler as profiler
+profiler_module = importlib.import_module("inatinqperf.utils.profiler")
+profiler = importlib.reload(profiler_module)
 
 
 def test_profiler_writes_metrics_and_json(tmp_path):

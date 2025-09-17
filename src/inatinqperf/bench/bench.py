@@ -9,38 +9,36 @@ Subcommands:
   run-all   -> download->embed->build(Faiss Flat + chosen backend)->search->update
 """
 
-import sys
-import pathlib
 import argparse
 import json
-import yaml
 import time
-import numpy as np
-from datasets import load_from_disk
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from collections.abc import Mapping
-import faiss
 
-from utils.profiler import Profiler
-from utils.dataio import load_composite, export_images
-from utils.embed import embed_images, to_hf_dataset, embed_text
-from adaptors.faiss_backend import BACKENDS as FAISS_BACKENDS
+import faiss
+import numpy as np
+import yaml
+from datasets import load_from_disk
+
+from inatinqperf.utils.profiler import Profiler
+from inatinqperf.utils.dataio import load_composite, export_images
+from inatinqperf.utils.embed import embed_images, to_hf_dataset, embed_text
+from inatinqperf.adaptors.faiss_backend import BACKENDS as FAISS_BACKENDS
 
 ALL_BACKENDS = {}
 ALL_BACKENDS.update(FAISS_BACKENDS)
 
-# Ensure project root is on sys.path when running as a script (bench/bench.py)
-ROOT = pathlib.Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+ROOT = Path(__file__).resolve().parents[1]
+
 SAMPLE_SIZE = 500_000  # max samples for training if needed
-BENCH_CFG = ROOT / "config" / "benchmark.yaml"
+BENCH_CFG = ROOT / "configs" / "bench.yaml"
 
 
-def load_cfg() -> Mapping[str, Any]:
+def load_cfg(path: str | Path) -> Mapping[str, Any]:
     """Load YAML config file."""
-    with Path.open(BENCH_CFG) as f:
+    print(f"Loading config: {path}")
+    with Path.open(path) as f:
         return yaml.safe_load(f)
 
 
@@ -313,7 +311,7 @@ def main() -> None:
     sp.set_defaults(func=cmd_run_all)
 
     args = p.parse_args()
-    cfg = load_cfg()
+    cfg = load_cfg(BENCH_CFG)
     args.func(args, cfg)
 
 

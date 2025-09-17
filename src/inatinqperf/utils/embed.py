@@ -1,17 +1,25 @@
 """Utilities for embedding images and text using CLIP models."""
 
+from collections.abc import Sequence
+
 import numpy as np
 import torch
-from datasets import load_from_disk, Dataset, Features, Value, Sequence
+from datasets import Dataset, Features, Value, load_from_disk
+from datasets import Sequence as HFSequence
 from PIL import Image
-from transformers import CLIPProcessor, CLIPModel
+from transformers import CLIPModel, CLIPProcessor
+
+_EMBED_MATRIX_NDIM = 2
 
 
 def pilify(img: Image.Image | np.ndarray) -> Image.Image:
-    """Convert image to PIL RGB."""
+    """Convert inputs to a PIL RGB image when possible."""
     if isinstance(img, Image.Image):
         return img.convert("RGB")
-    return Image.fromarray(img).convert("RGB")
+    if isinstance(img, np.ndarray):
+        return Image.fromarray(img).convert("RGB")
+    msg = "Expected PIL.Image or numpy.ndarray"
+    raise TypeError(msg)
 
 
 def embed_images(raw_dir: str, model_id: str, batch: int) -> tuple[Dataset, np.ndarray, list, list]:
@@ -35,27 +43,46 @@ def embed_images(raw_dir: str, model_id: str, batch: int) -> tuple[Dataset, np.n
             [int(ds[i + j].get("labels", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
         )
 
-    x = np.concatenate(all_emb, axis=0)
+    if all_emb:
+        x = np.concatenate(all_emb, axis=0)
+    else:
+        config = getattr(model, "config", None)
+        dim = 0
+        if config is not None:
+            if isinstance(config, dict):
+                dim = int(config.get("projection_dim") or config.get("hidden_size") or 0)
+            else:
+                dim = int(getattr(config, "projection_dim", 0) or getattr(config, "hidden_size", 0))
+        x = np.empty((0, max(dim, 0)), dtype="float32")
     return ds, x, ids, labels
 
 
 def to_hf_dataset(
     x: np.ndarray,
-    ids: Sequence[str] | np.ndarray,
-    labels: Sequence[int] | np.ndarray,
+    ids: Sequence[int] | np.ndarray,
+    labels: Sequence[int | str] | np.ndarray,
 ) -> Dataset:
     """Convert embeddings and metadata to a HuggingFace dataset."""
+    emb_dim = int(x.shape[1]) if x.ndim == _EMBED_MATRIX_NDIM and x.shape[1:] else 0
+
+    try:
+        label_values = [int(y) for y in labels]
+        label_feature = Value("int32")
+    except (TypeError, ValueError):
+        label_values = [str(y) for y in labels]
+        label_feature = Value("string")
+
     feats = Features(
         {
             "id": Value("int64"),
-            "label": Value("int32"),
-            "embedding": Sequence(Value("float32"), length=int(x.shape[1])),
+            "label": label_feature,
+            "embedding": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
         }
     )
     return Dataset.from_dict(
         {
             "id": [int(i) for i in ids],
-            "label": [int(y) for y in labels],
+            "label": label_values,
             "embedding": [row.tolist() for row in x],
         },
         features=feats,

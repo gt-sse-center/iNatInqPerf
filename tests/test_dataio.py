@@ -1,5 +1,7 @@
 # tests/test_dataio.py
+import contextlib
 import csv
+import importlib
 import io
 from typing import Any, List
 
@@ -7,122 +9,89 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from inatinqperf.utils.dataio import load_composite, export_images
+_dataio_module = importlib.import_module("inatinqperf.utils.dataio")
+dataio = importlib.reload(_dataio_module)
+load_composite = dataio.load_composite
+export_images = dataio.export_images
 
 
-# ----------------------------
-# Helpers / fakes for datasets
-# ----------------------------
 class FakeDataset(list):
-    """Minimal stand-in for `datasets.Dataset` that supports iteration and indexing."""
+    """Minimal stand-in for `datasets.Dataset` supporting iteration and indexing."""
 
-    # In these tests we only iterate; no extra API needed.
     pass
 
 
-@pytest.fixture
-def fake_load_dataset(monkeypatch):
-    """Monkeypatch `datasets.load_dataset` with controllable behavior."""
+@pytest.fixture()
+def fake_loader(monkeypatch):
+    """Monkeypatch `load_dataset` to capture split requests."""
+
     calls: List[Any] = []
 
     def _load(hf_id: str, split: str):
         calls.append((hf_id, split))
-        # Simulate failures for a specific split
-        if split == "bad":
-            raise RuntimeError("split not available")
-        # Return a small fake dataset tagged by split for identification
+        if split in {"bad", "worse"}:
+            raise RuntimeError("boom")
         return FakeDataset([{"split": split}])
-
-    import inatinqperf.utils.dataio as dataio
 
     monkeypatch.setattr(dataio, "load_dataset", _load, raising=True)
     return calls
 
 
-@pytest.fixture
-def fake_concatenate(monkeypatch):
-    """Monkeypatch `datasets.concatenate_datasets` to simply join lists."""
+@pytest.fixture()
+def fake_concat(monkeypatch):
+    """Monkeypatch `concatenate_datasets` to track usage and join iterables."""
 
     def _concat(parts):
-        # confirm it's getting a list-like
         out = FakeDataset()
-        for p in parts:
-            out.extend(p)
-        # Attach a flag so we can assert this path was taken
+        for part in parts:
+            out.extend(part)
         out.concatenated = True  # type: ignore[attr-defined]
         return out
-
-    import inatinqperf.utils.dataio as dataio
 
     monkeypatch.setattr(dataio, "concatenate_datasets", _concat, raising=True)
 
 
-# ----------------------------
-# Tests for load_composite(...)
-# ----------------------------
-def test_load_composite_concatenates_on_plus_expression(fake_load_dataset, fake_concatenate, monkeypatch):
-    import inatinqperf.utils.dataio as dataio
+def test_load_composite_all_parts_fail_falls_back_to_train(fake_loader):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        ds = load_composite("hf/any", "bad + worse")
 
-    monkeypatch.setattr(
-        dataio, "load_dataset", lambda hf_id, split: FakeDataset([{"split": split}]), raising=True
-    )
-
-    # Expression with spaces; one missing/empty chunk should be ignored
-    ds = load_composite("hf/some-id", "train[:5] + validation[:3] + ")
-
-    # We expect a concatenated FakeDataset with 2 items (one per split)
-    assert isinstance(ds, FakeDataset)
-    assert hasattr(ds, "concatenated")
-    # Order is not guaranteed; compare as a set
-    assert set(row["split"] for row in ds) == {"train[:5]", "validation[:3]"}
-
-
-def test_load_composite_single_part_returns_dataset(fake_load_dataset, monkeypatch):
-    import inatinqperf.utils.dataio as dataio
-
-    monkeypatch.setattr(
-        dataio, "load_dataset", lambda hf_id, split: FakeDataset([{"split": split}]), raising=True
-    )
-    monkeypatch.setattr(
-        dataio, "concatenate_datasets", lambda _: (_ for _ in ()).throw(AssertionError), raising=True
-    )
-
-    ds = load_composite("hf/some-id", "train[:2]")
-    assert isinstance(ds, FakeDataset)
-    assert len(ds) == 1 and ds[0]["split"] == "train[:2]"
-
-
-def test_load_composite_fallback_to_train_when_all_parts_fail(monkeypatch):
-    calls = []
-
-    def _load(hf_id: str, split: str):
-        calls.append((hf_id, split))
-        if split != "train":
-            raise RuntimeError("boom")
-        return FakeDataset([{"split": split}])
-
-    import inatinqperf.utils.dataio as dataio
-
-    monkeypatch.setattr(dataio, "load_dataset", _load, raising=True)
-
-    ds = load_composite("hf/any", "bad + also_bad")
-    assert isinstance(ds, FakeDataset)
+    splits = [s for _, s in fake_loader]
+    assert splits == ["bad", "worse", "train"]
     assert [row["split"] for row in ds] == ["train"]
-    # Ensure it attempted the requested splits before falling back
-    splits = [split for _, split in calls]
-    assert "bad" in splits and "also_bad" in splits and "train" in splits
+    assert "[DATAIO] Warning: failed to load dataset split 'bad'" in buf.getvalue()
 
 
-# ----------------------------
-# Tests for export_images(...)
-# ----------------------------
+def test_load_composite_single_part_avoids_concat(monkeypatch):
+    monkeypatch.setattr(
+        dataio,
+        "load_dataset",
+        lambda hf_id, split: FakeDataset([{"split": split}]),
+        raising=True,
+    )
+    monkeypatch.setattr(
+        dataio,
+        "concatenate_datasets",
+        lambda *_: (_ for _ in ()).throw(AssertionError("should not concatenate")),
+        raising=True,
+    )
+
+    ds = load_composite("hf/some", "train[:4]")
+    assert isinstance(ds, FakeDataset)
+    assert ds[0]["split"] == "train[:4]"
+
+
+def test_load_composite_multiple_parts_concatenates(fake_loader, fake_concat):
+    ds = load_composite("hf/any", "train[:2] + train[:3]")
+    assert isinstance(ds, FakeDataset)
+    assert getattr(ds, "concatenated", False) is True
+    splits = [s for _, s in fake_loader]
+    assert splits[:2] == ["train[:2]", "train[:3]"]
+
+
 def test_export_images_writes_jpegs_and_manifest(tmp_path):
-    # Build a tiny dataset with:
-    #  - one PIL.Image
-    #  - one NumPy array (HxWxC)
-    #  - labels in different forms: int and string
     pil_img = Image.new("RGB", (8, 8), color=(10, 20, 30))
-    np_img = np.ones((8, 8, 3), dtype=np.uint8) * 127  # gray image
+    np_img = np.ones((8, 8, 3), dtype=np.uint8) * 127
 
     ds = FakeDataset(
         [
@@ -134,32 +103,18 @@ def test_export_images_writes_jpegs_and_manifest(tmp_path):
     export_dir = tmp_path / "images_out"
     manifest_path = export_images(ds, str(export_dir))
 
-    # Read manifest
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        rows = list(csv.reader(f))
-    assert len(rows) == 3  # header + 2 items
+    with open(manifest_path, "r", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
 
-    # Header may be exactly these columns; if not, map by position assuming 3 cols
-    header = rows[0]
-    assert len(header) == 3
-    # Normalize header names to lower for flexible matching
-    header_lower = [h.strip().lower() for h in header]
-    assert set(header_lower) == {"index", "filename", "label"}
+    header = [col.lower() for col in rows[0]]
+    col_idx = {name: header.index(name) for name in ("index", "filename", "label")}
 
-    # Build helper to get column index by name independent of order
-    col_idx = {name: header_lower.index(name) for name in ("index", "filename", "label")}
     row1, row2 = rows[1], rows[2]
-
-    # Labels preserved: first is int-like, second is string-like
     assert row1[col_idx["label"]] in ("7", 7)
-    assert str(row2[col_idx["label"]]).lower() == "butterfly"
+    assert row2[col_idx["label"]].lower() == "butterfly"
 
-    # Files exist and are valid JPEGs
-    f1 = export_dir / row1[col_idx["filename"]]
-    f2 = export_dir / row2[col_idx["filename"]]
-    assert f1.exists() and f2.exists()
-    with Image.open(f1) as im0:
-        assert im0.size == (8, 8)
-    with Image.open(f2) as im1:
-        # Mode may be normalized to RGB by exporter; just ensure it opens
-        assert im1.size == (8, 8)
+    fpaths = [export_dir / row[col_idx["filename"]] for row in (row1, row2)]
+    for fp in fpaths:
+        assert fp.exists()
+        with Image.open(fp) as img:
+            assert img.size == (8, 8)

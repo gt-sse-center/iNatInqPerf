@@ -1,10 +1,14 @@
-import numpy as np
-import pytest
 import contextlib
+import importlib
 import io
 
-from inatinqperf.adaptors.faiss_backend import FaissFlat, FaissIVFPQ
-from inatinqperf.adaptors import faiss_backend as fb_mod
+import numpy as np
+import pytest
+
+faiss_module = importlib.import_module("inatinqperf.adaptors.faiss_backend")
+fb_mod = importlib.reload(faiss_module)
+FaissFlat = fb_mod.FaissFlat
+FaissIVFPQ = fb_mod.FaissIVFPQ
 
 
 @pytest.fixture

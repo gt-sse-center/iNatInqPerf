@@ -7,13 +7,30 @@ version = "0.0.0"
 #
 #   uv run python -m AutoGitSemVer.scripts.UpdatePythonVersion ./pyproject.toml ./src
 
-description = "Add your description here"
+description = "iNatInqPerf is a benchmark implemented to evalaute performance vs. cost trade-offs of running NLP based search (like INQUIRE) in a platform with different vectorDBs (like INaturalists)."
 readme = "README.md"
 authors = [
     { name = "Ketan Bhardwaj", email = "ketanbj@cc.gatech.edu" }
 ]
-requires-python = ">= 3.11"
-dependencies = []
+requires-python = ">= 3.10"
+dependencies = [
+    "numpy>=1.23,<2.0",
+    "pandas>=1.5,<2.3",
+    "tqdm>=4.66",
+    "pillow>=9.5",
+    "psutil>=5.9",
+    "datasets>=2.14,<3.0",
+    "huggingface-hub>=0.23",
+    "safetensors>=0.4",
+    "transformers>=4.35,<4.42",
+    "torch>=2.0,<2.3",
+    "torchvision>=0.15,<0.19",
+    "faiss-cpu>=1.7.4",
+    "pyyaml>=6.0",
+    "codetiming>=1.4",
+    "requests>=2.31",
+]
+
 classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
@@ -41,10 +58,19 @@ dev = [
     "pytest>=8.4.2",
     "pytest-cov>=7.0.0",
     "ruff>=0.13.0",
+    "py-spy",
 ]
 
 [tool.pytest.ini_options]
 addopts = "--verbose -vv --capture=no --cov=inatinqperf --cov-report html --cov-report term --cov-report xml:coverage.xml --cov-fail-under=95.0"
+
+[tool.scripts]
+download = "python src/bench/bench.py download"
+embed = "python src/bench/bench.py embed"
+build = "python src/bench/bench.py build"
+search = "python src/bench/bench.py search"
+update = "python src/bench/bench.py update"
+run-all = "python src/bench/bench.py run-all --size small --backend faiss.flat"
 
 [tool.ruff]
 line-length = 110
@@ -75,6 +101,9 @@ ignore = [
     "TRY002", # Create your own exception
     "TRY300", # Consider moving this statement to an `else` block
     "UP032", # Use f-string instead of `format` call
+    "T201",  # keep use of print`
+    "ARG002", # need this for some derived classes not needing some args
+    "PERF203", #try catch in loop for data reading
 ]
 
 [tool.ruff.lint.mccabe]

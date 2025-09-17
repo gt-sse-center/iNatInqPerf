@@ -25,7 +25,7 @@ jobs:
 
     with:
       # These values can be customized for your specific requirements.
-      operating_system_json_string: "[ 'macos-latest', 'ubuntu-latest', 'windows-latest' ]"
+      operating_system_json_string: "[ 'ubuntu-latest' ]"
       python_version_json_string: "['3.11']"
       python_package_version: "3.11"
       coverage_badge_gist_id: "521b537b3503957227f91dfb3db59065"

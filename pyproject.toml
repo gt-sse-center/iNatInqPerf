@@ -1,13 +1,13 @@
 [project]
 name = "inatinqperf"
-version = "0.1.7" 
+version = "0.0.0" 
 #          ^^^^^
 # Wheel names will be generated according to this value. Do not manually modify this value; instead
 # update it according to committed changes by running this command from the root of the repository:
 #
 #   uv run python -m AutoGitSemVer.scripts.UpdatePythonVersion ./pyproject.toml ./src
 
-description = "Add your description here"
+description = "iNatInqPerf is a benchmark implemented to evalaute performance vs. cost trade-offs of running NLP based search (like INQUIRE) in a platform with different vectorDBs (like INaturalists)."
 readme = "README.md"
 authors = [
     { name = "Ketan Bhardwaj", email = "ketanbj@cc.gatech.edu" }

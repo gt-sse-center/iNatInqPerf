@@ -8,5 +8,4 @@ def hello() -> str:
 
 from importlib.metadata import version  # noqa: E402
 
-
 __version__ = version("inatinqperf")

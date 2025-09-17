@@ -1,18 +1,18 @@
-# tests/test_vector_backend.py
+# tests/test_vectordb.py
 import numpy as np
 import pytest
 
-from inatinqperf.adaptors.base import VectorBackend
+from inatinqperf.adaptors.base import VectorDatabase
 
 
-def test_vectorbackend_is_abstract():
+def test_vectordb_is_abstract():
     # You should not be able to instantiate the ABC directly
     with pytest.raises(TypeError):
-        _ = VectorBackend()  # type: ignore[abstract]
+        _ = VectorDatabase()  # type: ignore[abstract]
 
 
 def test_partial_implementation_rejected():
-    class Partial(VectorBackend):
+    class Partial(VectorDatabase):
         """Missing required abstract methods -> still abstract."""
 
         def __init__(self, dim: int = 0, metric: str = "", **params):
@@ -24,9 +24,9 @@ def test_partial_implementation_rejected():
         _ = Partial()  # type: ignore[abstract]
 
 
-class DummyBackend(VectorBackend):
+class DummyVectorDatabase(VectorDatabase):
     """
-    A minimal concrete backend for exercising the VectorBackend contract.
+    A minimal concrete vector database for exercising the VectorDatabase contract.
     Implements brute-force search in-memory to validate shapes & lifecycle.
     """
 
@@ -123,18 +123,18 @@ def tiny_dataset_fixture():
 def test_lifecycle_and_shapes(metric, tiny_dataset):
     ids, X = tiny_dataset
 
-    be = DummyBackend(dim=2, metric=metric)
+    db = DummyVectorDatabase(dim=2, metric=metric)
 
     # train should be a no-op but must accept input
-    be.train(X)
+    db.train(X)
 
     # upsert vectors
-    be.upsert(ids, X)
+    db.upsert(ids, X)
 
     # search with two queries
     Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
     topk = 3
-    D, I = be.search(Q, topk=topk)
+    D, I = db.search(Q, topk=topk)
 
     # Shape checks
     assert D.shape == (Q.shape[0], topk)
@@ -146,37 +146,37 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
     assert 10 in I[0]
 
     # stats must be a dict with expected keys
-    st = be.stats()
+    st = db.stats()
     assert isinstance(st, dict)
     assert st["ntotal"] == 4
     assert st["dim"] == 2
     assert st["metric"] == metric
 
     # delete should remove specified ids
-    be.delete([11, 13])
-    st2 = be.stats()
+    db.delete([11, 13])
+    st2 = db.stats()
     assert st2["ntotal"] == 2
 
     # drop should release data
-    be.drop()
-    assert be.stats()["dropped"] is True
+    db.drop()
+    assert db.stats()["dropped"] is True
 
 
 def test_upsert_replaces_existing(tiny_dataset):
     ids, X = tiny_dataset
-    be = DummyBackend(dim=2, metric="ip")
-    be.upsert(ids, X)
+    db = DummyVectorDatabase(dim=2, metric="ip")
+    db.upsert(ids, X)
 
     # Upsert same ids with shifted vectors
     X2 = X + 1.0
-    be.upsert(ids, X2)
+    db.upsert(ids, X2)
 
     # Should contain exactly len(ids) vectors (deduped), not doubled
-    assert be.stats()["ntotal"] == len(ids)
+    assert db.stats()["ntotal"] == len(ids)
 
     # Query should reflect updated vectors
     Q = np.array([[2.0, 1.0]], dtype=np.float32)
-    D, I = be.search(Q, topk=1)
+    D, I = db.search(Q, topk=1)
     assert I.shape == (1, 1)
-    # With IP and shifted vectors, id 12 ([2,2]) should be the best match
+    # With IP and shifted vectors, id 12 ([2,2]) should db the best match
     assert I[0, 0] in ids

@@ -39,7 +39,6 @@ def get_device() -> str:
 class ImageDatasetWithEmbeddings:
     """An image dataset with embeddings, IDs and labels."""
 
-    dataset: Dataset
     embeddings: np.ndarray
     ids: Sequence[int] | np.ndarray
     labels: Sequence[int | str] | np.ndarray
@@ -61,7 +60,7 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
             inputs = proc(images=batch_imgs, return_tensors="pt", padding=True).to(device)
             feats = model.get_image_features(**inputs)
             feats = torch.nn.functional.normalize(feats, p=2, dim=1)
-            all_emb.append(feats.cpu().numpy().astype("float32"))
+            all_emb.append(feats.cpu().numpy().astype(np.float32))
         ids.extend([i + j for j in range(len(batch_imgs))])
         labels.extend(
             [int(ds[i + j].get("labels", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
@@ -77,9 +76,9 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
                 dim = int(config.get("projection_dim") or config.get("hidden_size") or 0)
             else:
                 dim = int(getattr(config, "projection_dim", 0) or getattr(config, "hidden_size", 0))
-        x = np.empty((0, max(dim, 0)), dtype="float32")
+        x = np.empty((0, max(dim, 0)), dtype=np.float32)
 
-    return ImageDatasetWithEmbeddings(ds, x, ids, labels)
+    return ImageDatasetWithEmbeddings(x, ids, labels)
 
 
 def to_hf_dataset(
@@ -102,7 +101,7 @@ def to_hf_dataset(
             "id": Value("int64"),
             "label": label_feature,
             "embedding": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
-        }
+        },
     )
     return Dataset.from_dict(
         {
@@ -123,4 +122,4 @@ def embed_text(queries: list[str], model_id: str) -> np.ndarray:
         inputs = proc(text=queries, return_tensors="pt", padding=True).to(device)
         feats = model.get_text_features(**inputs)
         feats = torch.nn.functional.normalize(feats, p=2, dim=1)
-    return feats.cpu().numpy().astype("float32")
+    return feats.cpu().numpy().astype(np.float32)

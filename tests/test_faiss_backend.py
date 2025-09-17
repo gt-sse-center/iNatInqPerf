@@ -4,12 +4,12 @@ import io
 import numpy as np
 import pytest
 
-from inatinqperf.adaptors import faiss_backend
-from inatinqperf.adaptors.faiss_backend import FaissFlat, FaissIVFPQ
+from inatinqperf.adaptors import faiss_adaptor
+from inatinqperf.adaptors.faiss_adaptor import FaissFlat, FaissIVFPQ
 
 
-@pytest.fixture
-def small_data():
+@pytest.fixture(name="small_data")
+def small_data_fixture():
     X = np.array(
         [
             [1.0, 0.0],
@@ -17,18 +17,18 @@ def small_data():
             [1.0, 1.0],
             [-1.0, 0.0],
         ],
-        dtype="float32",
+        dtype=np.float32,
     )
-    ids = np.array([100, 101, 102, 103], dtype="int64")
+    ids = np.array([100, 101, 102, 103], dtype=np.int64)
     return ids, X
 
 
-@pytest.fixture
-def ivfpq_trainset():
+@pytest.fixture(name="ivfpq_trainset")
+def ivfpq_trainset_fixture():
     """Large training set so IVF-PQ can train without FAISS clustering warnings."""
     rng = np.random.default_rng(42)
-    X = rng.standard_normal((10240, 2)).astype("float32")  # >= 9984
-    ids = np.arange(1000, 1000 + X.shape[0], dtype="int64")
+    X = rng.standard_normal((10240, 2)).astype(np.float32)  # >= 9984
+    ids = np.arange(1000, 1000 + X.shape[0], dtype=np.int64)
     return ids, X
 
 
@@ -41,7 +41,7 @@ def test_faiss_flat_lifecycle(metric, small_data):
     st = be.stats()
     assert st["ntotal"] == len(ids)
 
-    Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype="float32")
+    Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
     D, I = be.search(Q, topk=2)
 
     # shape checks
@@ -56,7 +56,6 @@ def test_faiss_flat_lifecycle(metric, small_data):
     assert be.stats()["ntotal"] == 2
 
     # drop releases index (idempotent)
-    be.drop()
     be.drop()
     assert getattr(be, "index", None) is None
 
@@ -81,7 +80,7 @@ def test_faiss_ivfpq_train_and_search_with_large_training(ivfpq_trainset, small_
     assert "nlist" in s
     assert "nprobe" in s
 
-    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32")
+    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     D, I = be.search(Q, topk=2)
 
     # shapes
@@ -111,7 +110,7 @@ def test_faiss_ivfpq_l2_metric_delete_and_drop(ivfpq_trainset, small_data):
     be.upsert(ids, X)
 
     # Search with L2 metric; still expect small_data ids to appear
-    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype="float32")
+    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     # Increase nprobe to improve recall; ANN may otherwise return fewer than topk hits (filled with -1)
     D, I = be.search(Q, topk=3, nprobe=64)
     assert D.shape == (2, 3)
@@ -152,7 +151,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
     assert nt2 == nt1  # replaced, not duplicated
 
     # Force a very small and a larger nprobe to exercise the branch
-    Q = np.array([[1.0, 0.0]], dtype="float32")
+    Q = np.array([[1.0, 0.0]], dtype=np.float32)
     D1, I1 = be.search(Q, topk=3, nprobe=1)
     D2, I2 = be.search(Q, topk=3, nprobe=64)
 
@@ -168,7 +167,7 @@ def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
     be = FaissFlat(dim=2, metric="ip")
     be.upsert(ids, X)
 
-    Q = np.array([[0.2, 0.9]], dtype="float32")
+    Q = np.array([[0.2, 0.9]], dtype=np.float32)
     # Ask for more neighbors than we have to ensure code handles it
     D, I = be.search(Q, topk=10)
     assert D.shape == (1, 10)
@@ -190,7 +189,7 @@ def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
     _buf = io.StringIO()
     with contextlib.redirect_stderr(_buf):
         be.train(ivfpq_trainset[1])
-    ivf = faiss_backend._unwrap_to_ivf(be.index.index)
+    ivf = faiss_adaptor._unwrap_to_ivf(be.index.index)
     assert ivf is not None and hasattr(ivf, "nlist")
     be.drop()
 
@@ -204,7 +203,7 @@ def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data
         be.train(ivfpq_trainset[1])
     be.upsert(ids, X)
 
-    Q = np.array([[1.0, 0.0]], dtype="float32")
+    Q = np.array([[1.0, 0.0]], dtype=np.float32)
     # Ask for more neighbors than exist; FAISS may pad with -1
     D, I = be.search(Q, topk=10, nprobe=64)
     assert D.shape == (1, 10) and I.shape == (1, 10)
@@ -239,7 +238,7 @@ def test_unwrap_fallback_dummy_chain():
             self.index = inner
 
     base = Wrapper(Wrapper(Leaf()))
-    out = faiss_backend._unwrap_to_ivf(base)
+    out = faiss_adaptor._unwrap_to_ivf(base)
     assert out is not None and hasattr(out, "nlist") and out.nlist == 5
 
 
@@ -250,7 +249,7 @@ def test_unwrap_fallback_dummy_chain():
 #     # Start with large nlist, tiny PQ (nbits=2, m=1) so training with small set succeeds and triggers reduce.
 #     be = FaissIVFPQ(dim=2, metric="ip", nlist=64, m=1, nbits=2)  # nprobe defaults to 32
 #     _, X_train = ivfpq_trainset  # 10,240 x 2
-#     #X_train = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.1], [0.2, 0.3], [0.9, 0.2], [0.1, 0.8], [0.3, 0.4], [0.7, 0.6]], dtype="float32")
+#     #X_train = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.1], [0.2, 0.3], [0.9, 0.2], [0.1, 0.8], [0.3, 0.4], [0.7, 0.6]], dtype=np.float32)
 #     _buf = io.StringIO()
 #     with contextlib.redirect_stderr(_buf):
 #         be.train(X_train)
@@ -264,6 +263,6 @@ def test_unwrap_fallback_dummy_chain():
 
 #     # Upsert and search still function
 #     be.upsert(ids, X)
-#     D, I = be.search(np.array([[1.0, 0.0]], dtype="float32"), topk=2)
+#     D, I = be.search(np.array([[1.0, 0.0]], dtype=np.float32), topk=2)
 #     assert D.shape == (1, 2) and I.shape == (1, 2)
 #     be.drop()

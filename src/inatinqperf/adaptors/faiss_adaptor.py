@@ -1,4 +1,4 @@
-"""FAISS vector database backend adaptor."""
+"""FAISS vector database adaptor."""
 
 from collections.abc import Sequence
 
@@ -6,13 +6,13 @@ import faiss
 import numpy as np
 from loguru import logger
 
-from inatinqperf.adaptors.base import VectorBackend
+from inatinqperf.adaptors.base import VectorDatabase
 
 # TODO(Varun): Use Metric enum instead of strings
 
 
-class FaissFlat(VectorBackend):
-    """FAISS Flat index backend."""
+class FaissFlat(VectorDatabase):
+    """FAISS vector database with Flat index."""
 
     def __init__(self, dim: int, metric: str = "ip", **params) -> None:  # noqa: ARG002
         """Initialize FAISS Flat index."""
@@ -28,18 +28,18 @@ class FaissFlat(VectorBackend):
 
     def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Upsert vectors with given IDs."""
-        self.index.remove_ids(faiss.IDSelectorArray(ids.astype("int64")))
-        self.index.add_with_ids(x.astype("float32"), ids.astype("int64"))
+        self.index.remove_ids(faiss.IDSelectorArray(ids.astype(np.int64)))
+        self.index.add_with_ids(x.astype(np.float32), ids.astype(np.int64))
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
-        arr = np.asarray(list(ids), dtype="int64")
+        arr = np.asarray(list(ids), dtype=np.int64)
         self.index.remove_ids(faiss.IDSelectorArray(arr))
 
     def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:
         """Search for top-k nearest neighbors."""
         kwargs.pop("nprobe", None)  # not used
-        return self.index.search(q.astype("float32"), topk)
+        return self.index.search(q.astype(np.float32), topk)
 
     def stats(self) -> dict[str, object]:
         """Return index statistics."""
@@ -75,8 +75,8 @@ def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
     return None
 
 
-class FaissIVFPQ(VectorBackend):
-    """FAISS IVF-PQ index backend."""
+class FaissIVFPQ(VectorDatabase):
+    """FAISS vector database with IVF-PQ index."""
 
     def __init__(self, dim: int, metric: str = "ip", **params) -> None:
         """Initialize FAISS IVF-PQ index."""
@@ -97,7 +97,7 @@ class FaissIVFPQ(VectorBackend):
 
     def train(self, x_train: np.ndarray) -> None:
         """Train the index with given vectors."""
-        x_train = x_train.astype("float32", copy=False)
+        x_train = x_train.astype(np.float32, copy=False)
         n = int(x_train.shape[0])
 
         # If dataset is smaller than nlist, rebuild with reduced nlist
@@ -125,17 +125,17 @@ class FaissIVFPQ(VectorBackend):
 
     def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Upsert vectors with given IDs."""
-        self.index.remove_ids(faiss.IDSelectorArray(ids.astype("int64")))
-        self.index.add_with_ids(x.astype("float32"), ids.astype("int64"))
+        self.index.remove_ids(faiss.IDSelectorArray(ids.astype(np.int64)))
+        self.index.add_with_ids(x.astype(np.float32), ids.astype(np.int64))
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
-        arr = np.asarray(list(ids), dtype="int64")
+        arr = np.asarray(list(ids), dtype=np.int64)
         self.index.remove_ids(faiss.IDSelectorArray(arr))
 
     def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:
         """Search for top-k nearest neighbors. Supports runtime nprobe override."""
-        q = q.astype("float32", copy=False)
+        q = q.astype(np.float32, copy=False)
         # Runtime override for nprobe
         ivf = _unwrap_to_ivf(self.index.index)
         if ivf is not None and hasattr(ivf, "nprobe"):

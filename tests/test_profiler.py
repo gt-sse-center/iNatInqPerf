@@ -1,7 +1,6 @@
 # tests/test_profiler.py
 import json
 import time
-from pathlib import Path
 
 from inatinqperf.utils import profiler
 
@@ -14,7 +13,7 @@ def test_profiler_writes_metrics_and_json(tmp_path):
 
     with p as prof:
         # Do some work and sample memory
-        x = [i for i in range(1000)]
+        _ = [i for i in range(1000)]
         prof.sample()
         time.sleep(0.01)
 

@@ -128,12 +128,10 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
     )
 
     dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch=2)
-    ds_out = dataset_with_embeddings.dataset
     X = dataset_with_embeddings.embeddings
     ids = dataset_with_embeddings.ids
     labels = dataset_with_embeddings.labels
 
-    assert ds_out is ds
     assert X.shape[0] == 4
     assert all(isinstance(i, int) for i in ids)
     assert labels == [0, 1, 2, 3]

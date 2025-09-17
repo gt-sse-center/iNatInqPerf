@@ -677,10 +677,7 @@ wheels = [
 name = "inatinqperf"
 version = "0.1.7"
 source = { editable = "." }
-
-[package.dev-dependencies]
-dev = [
-    { name = "autogitsemver" },
+dependencies = [
     { name = "codetiming" },
     { name = "datasets" },
     { name = "faiss-cpu" },
@@ -688,14 +685,9 @@ dev = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pillow" },
-    { name = "pre-commit" },
     { name = "psutil" },
-    { name = "py-spy" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
     { name = "pyyaml" },
     { name = "requests" },
-    { name = "ruff" },
     { name = "safetensors" },
     { name = "torch" },
     { name = "torchvision" },
@@ -703,11 +695,18 @@ dev = [
     { name = "transformers" },
 ]
 
-[package.metadata]
-
-[package.metadata.requires-dev]
+[package.dev-dependencies]
 dev = [
-    { name = "autogitsemver", specifier = ">=0.9.2" },
+    { name = "autogitsemver" },
+    { name = "pre-commit" },
+    { name = "py-spy" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
     { name = "codetiming", specifier = ">=1.4" },
     { name = "datasets", specifier = ">=2.14,<3.0" },
     { name = "faiss-cpu", specifier = ">=1.7.4" },
@@ -715,19 +714,24 @@ dev = [
     { name = "numpy", specifier = ">=1.23,<2.0" },
     { name = "pandas", specifier = ">=1.5,<2.3" },
     { name = "pillow", specifier = ">=9.5" },
-    { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "psutil", specifier = ">=5.9" },
-    { name = "py-spy" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.31" },
-    { name = "ruff", specifier = ">=0.13.0" },
     { name = "safetensors", specifier = ">=0.4" },
     { name = "torch", specifier = ">=2.0,<2.3" },
     { name = "torchvision", specifier = ">=0.15,<0.19" },
     { name = "tqdm", specifier = ">=4.66" },
     { name = "transformers", specifier = ">=4.35,<4.42" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "autogitsemver", specifier = ">=0.9.2" },
+    { name = "pre-commit", specifier = ">=4.3.0" },
+    { name = "py-spy" },
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "ruff", specifier = ">=0.13.0" },
 ]
 
 [[package]]

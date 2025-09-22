@@ -23,7 +23,7 @@ class FaissFlat(VectorBackend):
 
     name = "faiss.flat"
 
-    def __init__(self, dim: int, metric: str = "ip", **params) -> None:  # noqa: ARG002
+    def __init__(self, dim: int, metric: str = "ip", **params) -> None:
         """Initialize FAISS Flat index."""
         super().__init__()
 
@@ -159,7 +159,7 @@ class FaissIVFPQ(VectorBackend):
             ivf.nprobe = int(kwargs.get("nprobe", self.nprobe))
         return self.index.search(q, topk)
 
-    def stats(self) -> dict[str, Any]:
+    def stats(self) -> dict[str, object]:
         """Return index statistics."""
         ivf = _unwrap_to_ivf(self.index.index) if self.index is not None else None
         return {

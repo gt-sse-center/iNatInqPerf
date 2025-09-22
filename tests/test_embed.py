@@ -81,7 +81,11 @@ def test_embed_images_empty_dataset(monkeypatch):
         embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
     )
 
-    ds_out, X, ids, labels = embed.embed_images("anypath", "dummy-model", batch=2)
+    dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch=2)
+    X = dataset_with_embeddings.embeddings
+    ids = dataset_with_embeddings.ids
+    labels = dataset_with_embeddings.labels
+
     assert X.shape[0] == 0
     assert ids == []
     assert labels == []
@@ -126,7 +130,12 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
         embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
     )
 
-    ds_out, X, ids, labels = embed.embed_images("anypath", "dummy-model", batch=2)
+    dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch=2)
+    ds_out = dataset_with_embeddings.dataset
+    X = dataset_with_embeddings.embeddings
+    ids = dataset_with_embeddings.ids
+    labels = dataset_with_embeddings.labels
+
     assert ds_out is ds
     assert X.shape[0] == 4
     assert all(isinstance(i, int) for i in ids)

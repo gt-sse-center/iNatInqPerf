@@ -106,7 +106,6 @@ ignore = [
     "TRY002", # Create your own exception
     "TRY300", # Consider moving this statement to an `else` block
     "UP032", # Use f-string instead of `format` call
-    "T201",  # keep use of print`
     "ARG002", # need this for some derived classes not needing some args
     "PERF203", #try catch in loop for data reading
 ]

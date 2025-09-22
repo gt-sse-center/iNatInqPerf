@@ -2,15 +2,12 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any
 
 import numpy as np
 
 
 class VectorBackend(ABC):
     """Abstract base class for vector database backends."""
-
-    name: str
 
     @abstractmethod
     def train(self, x_train: np.ndarray) -> None:
@@ -27,7 +24,7 @@ class VectorBackend(ABC):
         ...
 
     @abstractmethod
-    def stats(self) -> dict[str, Any]:
+    def stats(self) -> dict[str, object]:
         """Return index statistics."""
         ...
 

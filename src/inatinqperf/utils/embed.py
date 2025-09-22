@@ -9,6 +9,7 @@ from datasets import Sequence as HFSequence
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
 from pathlib import Path
+from dataclasses import dataclass
 
 _EMBED_MATRIX_NDIM = 2
 
@@ -23,7 +24,17 @@ def pilify(img: Image.Image | np.ndarray) -> Image.Image:
     raise TypeError(msg)
 
 
-def embed_images(raw_dir: Path | str, model_id: str, batch: int) -> tuple[Dataset, np.ndarray, list, list]:
+@dataclass
+class ImageDatasetWithEmbeddings:
+    """An image dataset with embeddings, IDs and labels."""
+
+    dataset: Dataset
+    embeddings: np.ndarray
+    ids: Sequence[int] | np.ndarray
+    labels: Sequence[int | str] | np.ndarray
+
+
+def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEmbeddings:
     """Embed images from a dataset on disk using a CLIP model."""
     ds = load_from_disk(raw_dir)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -31,6 +42,7 @@ def embed_images(raw_dir: Path | str, model_id: str, batch: int) -> tuple[Datase
     proc = CLIPProcessor.from_pretrained(model_id)
 
     imgs = [pilify(r["image"]) for r in ds]
+
     all_emb, ids, labels = [], [], []
     for i in range(0, len(imgs), batch):
         batch_imgs = imgs[i : i + batch]
@@ -55,7 +67,8 @@ def embed_images(raw_dir: Path | str, model_id: str, batch: int) -> tuple[Datase
             else:
                 dim = int(getattr(config, "projection_dim", 0) or getattr(config, "hidden_size", 0))
         x = np.empty((0, max(dim, 0)), dtype="float32")
-    return ds, x, ids, labels
+
+    return ImageDatasetWithEmbeddings(ds, x, ids, labels)
 
 
 def to_hf_dataset(

@@ -12,7 +12,7 @@ Subcommands:
 import argparse  # TODO(Varun): Consider using `typer` instead
 import json
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -34,16 +34,16 @@ SAMPLE_SIZE = 500_000  # max samples for training if needed
 BENCH_CFG = ROOT / "configs" / "bench.yaml"
 
 
-def load_cfg(path: Path) -> Mapping[str, Any]:
+def load_cfg(path: Path) -> Mapping[str, object]:
     """Load YAML config file."""
     logger.info(f"Loading config: {path}")
     with path.open() as f:
         return yaml.safe_load(f)
 
 
-def ensure_dir(p: Path | str) -> str:
+def ensure_dir(p: Path) -> Path:
     """Ensure directory exists."""
-    Path(p).mkdir(parents=True, exist_ok=True)
+    p.mkdir(parents=True, exist_ok=True)
     return p
 
 
@@ -65,13 +65,15 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     return hits / float(approx_i.shape[0] * k)
 
 
-def cmd_download(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+def cmd_download(size: str, out_dir: Path, perform_export_images: bool, cfg: Mapping[str, Any]) -> None:  # noqa: FBT001
     """Download HF dataset and optionally export images."""
+    # TODO(Varun): Make all the cmd_* functions take a class encapsulating the arguments.
     hf_id = cfg["dataset"]["hf_id"]
-    size = args.size
-    out_dir = args.out_dir or cfg["dataset"]["out_dir"]
+    out_dir = out_dir or cfg["dataset"]["out_dir"]
     export = (
-        args.export_images if args.export_images is not None else cfg["dataset"].get("export_images", True)
+        perform_export_images
+        if perform_export_images is not None
+        else cfg["dataset"].get("export_images", True)
     )
     split_map = cfg["dataset"]["size_splits"]
     split = split_map.get(size, split_map["small"])
@@ -86,23 +88,26 @@ def cmd_download(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
     logger.info(f"Saved HF dataset to: {out_dir}")
 
 
-def cmd_embed(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+def cmd_embed(model_id: int, batch_size: int, raw_dir: Path, emb_dir: Path, cfg: Mapping[str, Any]) -> None:
     """Compute CLIP embeddings and save HF dataset with 'embedding'."""
-    model_id = args.model_id or cfg["embedding"]["model_id"]
-    batch = args.batch or int(cfg["embedding"]["batch"])
-    raw_dir = args.raw_dir or cfg["dataset"]["out_dir"]
-    emb_dir = args.emb_dir or cfg["embedding"]["out_dir"]
+    model_id = model_id or cfg["embedding"]["model_id"]
+    batch_size = batch_size or int(cfg["embedding"]["batch"])
+    raw_dir = raw_dir or cfg["dataset"]["out_dir"]
+    emb_dir = emb_dir or cfg["embedding"]["out_dir"]
     out_hf_dir = cfg["embedding"]["out_hf_dir"]
     ensure_dir(emb_dir)
     ensure_dir(out_hf_dir)
     with Profiler("embed-images"):
-        _, x, ids, labels = embed_images(raw_dir, model_id, batch)
+        dataset_with_embeddings = embed_images(raw_dir, model_id, batch_size)
+        x = dataset_with_embeddings.dataset
+        ids = dataset_with_embeddings.ids
+        labels = dataset_with_embeddings.labels
         ds2 = to_hf_dataset(x, ids, labels)
         ds2.save_to_disk(out_hf_dir)
         logger.info(f"Embeddings: {x.shape} -> {out_hf_dir}")
 
 
-def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, Any]) -> dict:
+def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, object]) -> dict:
     """Instantiate backend, scrubbing reserved keys from params.
 
     Prevents errors like: TypeError: ... init() got multiple values for keyword 'metric'.
@@ -116,11 +121,10 @@ def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, An
     return backend(dim=dim, metric=metric, **safe_params)
 
 
-def cmd_build(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+def cmd_build(backend: str, hf_dir: Path, cfg: Mapping[str, Any]) -> None:
     """Build index for a backend."""
-    backend = args.backend
     params = cfg["backends"][backend]
-    hf_dir = args.hf_dir or cfg["embedding"]["out_hf_dir"]
+    hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
     ds = load_from_disk(hf_dir)
     x = np.stack(ds["embedding"]).astype("float32")
     metric = params.get("metric", "ip").lower()
@@ -137,13 +141,12 @@ def cmd_build(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
     logger.info("Stats:", be.stats())
 
 
-def cmd_search(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cfg: Mapping[str, Any]) -> None:
     """Profile search and compute recall@K vs exact baseline."""
-    backend = args.backend
     params = cfg["backends"][backend]
-    hf_dir = args.hf_dir or cfg["embedding"]["out_hf_dir"]
-    topk = int(args.topk or cfg["search"]["topk"])
-    queries_file = args.queries or cfg["search"]["queries_file"]
+    hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
+    topk = topk or int(cfg["search"]["topk"])
+    queries_file = queries or cfg["search"]["queries_file"]
     model_id = cfg["embedding"]["model_id"]
 
     ds = load_from_disk(hf_dir)
@@ -189,13 +192,12 @@ def cmd_search(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
     logger.info(json.dumps(stats, indent=2))
 
 
-def cmd_update(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+def cmd_update(backend: str, hf_dir: Path, add_n: int, delete: int, cfg: Mapping[str, Any]) -> None:
     """Upsert + delete small batch and re-search."""
-    backend = args.backend
     params = cfg["backends"][backend]
-    hf_dir = args.hf_dir or cfg["embedding"]["out_hf_dir"]
-    add_n = int(args.add or cfg["update"]["add_count"])
-    del_n = int(args.delete or cfg["update"]["delete_count"])
+    hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
+    add_n = add_n or int(cfg["update"]["add_count"])
+    del_n = delete or int(cfg["update"]["delete_count"])
 
     ds = load_from_disk(hf_dir)
     x = np.stack(ds["embedding"]).astype("float32")
@@ -221,7 +223,7 @@ def cmd_update(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
     logger.info("Update complete.", be.stats())
 
 
-def cmd_run_all(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
+def cmd_run_all(size: str, backend: str, cfg: Mapping[str, Any]) -> None:
     """Run end-to-end benchmark with all steps."""
 
     # minimal run for small dataset
@@ -229,7 +231,7 @@ def cmd_run_all(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
         pass
 
     a = A()
-    a.size = args.size or "small"
+    a.size = size or "small"
     a.out_dir = cfg["dataset"]["out_dir"]
     a.export_images = False
     cmd_download(a, cfg)
@@ -242,21 +244,21 @@ def cmd_run_all(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
     cmd_embed(b, cfg)
 
     # Build FAISS Flat baseline then chosen backend
-    for backend in ["faiss.flat", args.backend or "faiss.ivfpq"]:
+    for be in ["faiss.flat", backend or "faiss.ivfpq"]:
         c = A()
-        c.backend = backend
+        c.backend = be
         c.hf_dir = cfg["embedding"]["out_hf_dir"]
         cmd_build(c, cfg)
 
     d = A()
-    d.backend = args.backend or "faiss.ivfpq"
+    d.backend = backend or "faiss.ivfpq"
     d.hf_dir = cfg["embedding"]["out_hf_dir"]
     d.topk = 10
     d.queries = cfg["search"]["queries_file"]
     cmd_search(d, cfg)
 
     e = A()
-    e.backend = args.backend or "faiss.ivfpq"
+    e.backend = backend or "faiss.ivfpq"
     e.hf_dir = cfg["embedding"]["out_hf_dir"]
     e.add = None
     e.delete = None
@@ -276,8 +278,8 @@ def main() -> None:
     sp.set_defaults(func=cmd_download)
 
     sp = sub.add_parser("embed", help="Compute CLIP embeddings and save HF dataset with 'embedding'")
-    sp.add_argument("--raw_dir", default=None)
-    sp.add_argument("--emb_dir", default=None)
+    sp.add_argument("--raw_dir", default=None, type=Path)
+    sp.add_argument("--emb_dir", default=None, type=Path)
     sp.add_argument("--model_id", default=None)
     sp.add_argument("--batch", type=int, default=None)
     sp.set_defaults(func=cmd_embed)
@@ -296,7 +298,7 @@ def main() -> None:
 
     sp = sub.add_parser("update", help="Upsert + delete workflow on a backend")
     sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
-    sp.add_argument("--hf_dir", default=None)
+    sp.add_argument("--hf_dir", type=Path, default=None)
     sp.add_argument("--add", type=int, default=None)
     sp.add_argument("--delete", type=int, default=None)
     sp.set_defaults(func=cmd_update)

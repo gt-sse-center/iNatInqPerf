@@ -13,17 +13,10 @@ from inatinqperf.adaptors.base import VectorBackend
 # TODO(Varun): Use Metric enum instead of strings
 
 
-def _metric_to_faiss(metric: str) -> int:
-    """Convert metric string to FAISS metric type."""
-    return faiss.METRIC_INNER_PRODUCT if metric.lower() in ("ip", "cosine") else faiss.METRIC_L2
-
-
 class FaissFlat(VectorBackend):
     """FAISS Flat index backend."""
 
-    name = "faiss.flat"
-
-    def __init__(self, dim: int, metric: str = "ip", **params) -> None:  # noqa: ARG002
+    def __init__(self, dim: int, metric: str = "ip", **params) -> None:
         """Initialize FAISS Flat index."""
         super().__init__()
 
@@ -87,8 +80,6 @@ def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
 
 class FaissIVFPQ(VectorBackend):
     """FAISS IVF-PQ index backend."""
-
-    name = "faiss.ivfpq"
 
     def __init__(self, dim: int, metric: str = "ip", **params) -> None:
         """Initialize FAISS IVF-PQ index."""
@@ -159,7 +150,7 @@ class FaissIVFPQ(VectorBackend):
             ivf.nprobe = int(kwargs.get("nprobe", self.nprobe))
         return self.index.search(q, topk)
 
-    def stats(self) -> dict[str, Any]:
+    def stats(self) -> dict[str, object]:
         """Return index statistics."""
         ivf = _unwrap_to_ivf(self.index.index) if self.index is not None else None
         return {

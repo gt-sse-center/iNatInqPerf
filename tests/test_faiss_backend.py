@@ -188,10 +188,6 @@ def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
 
 
 def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
-    # _metric_to_faiss: unknown metric falls back to L2
-    assert fb_mod._metric_to_faiss("weird") == fb_mod.faiss.METRIC_L2
-    assert fb_mod._metric_to_faiss("cosine") == fb_mod.faiss.METRIC_INNER_PRODUCT
-
     # Build a real IVFPQ index and ensure unwrap hits the IVF layer
     be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
     _buf = io.StringIO()
@@ -248,11 +244,6 @@ def test_unwrap_fallback_dummy_chain():
     base = Wrapper(Wrapper(Leaf()))
     out = fb_mod._unwrap_to_ivf(base)
     assert out is not None and hasattr(out, "nlist") and out.nlist == 5
-
-
-def test_metric_to_faiss_ip_mapping():
-    # Cover the 'ip' branch explicitly
-    assert fb_mod._metric_to_faiss("ip") == fb_mod.faiss.METRIC_INNER_PRODUCT
 
 
 ## The following test needs to be debugged

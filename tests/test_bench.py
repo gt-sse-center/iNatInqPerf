@@ -7,7 +7,8 @@ import types
 import numpy as np
 import pytest
 
-import inatinqperf.bench.bench as bench
+from inatinqperf.bench import bench
+from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
 # ---------- Safe dummy backend ----------
@@ -65,64 +66,134 @@ def test_cmd_download_with_stubs(monkeypatch, tmp_path):
         def save_to_disk(self, path):  # mimic datasets.Dataset
             (tmp_path / "saved.flag").write_text("ok")
 
+    export_dirs: list = []
+
+    def _export_images(ds, out_dir):
+        export_dirs.append(out_dir)
+        manifest = tmp_path / "manifest.csv"
+        manifest.write_text("index,filename,label\n", encoding="utf-8")
+        return manifest
+
     monkeypatch.setattr(bench, "load_composite", lambda hf_id, split: Saveable())
-    monkeypatch.setattr(bench, "export_images", lambda ds, out_dir: tmp_path / "manifest.csv")
+    monkeypatch.setattr(bench, "export_images", _export_images)
 
     cfg = {
         "dataset": {
             "hf_id": "fake",
-            "out_dir": str(tmp_path),
+            "out_dir": tmp_path,
             "size_splits": {"small": "train[:10]"},
             "export_images": True,
         }
     }
-    args = types.SimpleNamespace(size="small", out_dir=None, export_images=None)
+    size = "small"
+    out_dir = None
+    export_images = None
 
-    bench.cmd_download(args, cfg)
-    # both code paths executed without exceptions
+    bench.cmd_download(size, out_dir, export_images, cfg)
+
+    assert (tmp_path / "saved.flag").exists()
+    assert export_dirs == [tmp_path / "images"]
+    assert (tmp_path / "manifest.csv").exists()
 
 
 def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
     # Stub embed_images -> returns (ds_out, X, ids, labels)
-    monkeypatch.setattr(
-        bench,
-        "embed_images",
-        lambda raw_dir, model_id, batch: ([], np.ones((3, 4), dtype="float32"), [0, 1, 2], [0, 1, 2]),
-    )
+    embed_calls: list[tuple[str, str, int]] = []
+
+    def _embed_images(raw_dir, model_id, batch):
+        embed_calls.append((raw_dir, model_id, batch))
+        return ImageDatasetWithEmbeddings(
+            np.asarray([]), np.ones((3, 4), dtype="float32"), [0, 1, 2], [0, 1, 2]
+        )
 
     # Stub to_hf_dataset -> save_to_disk
+    save_calls: list[str] = []
+
     class HFSaver:
         def save_to_disk(self, path):
+            save_calls.append(path)
             (tmp_path / "emb.flag").write_text("ok")
 
+    monkeypatch.setattr(bench, "embed_images", _embed_images)
     monkeypatch.setattr(bench, "to_hf_dataset", lambda X, ids, labels: HFSaver())
 
     cfg = {
-        "dataset": {"out_dir": str(tmp_path)},
+        "dataset": {"out_dir": tmp_path},
         "embedding": {
             "model_id": "openai/clip",
             "batch": 2,
-            "out_dir": str(tmp_path),
-            "out_hf_dir": str(tmp_path),
+            "out_dir": tmp_path,
+            "out_hf_dir": tmp_path,
         },
     }
-    args = types.SimpleNamespace(model_id=None, batch=None, raw_dir=None, emb_dir=None)
 
-    bench.cmd_embed(args, cfg)
+    model_id = None
+    batch = None
+    raw_dir = None
+    emb_dir = None
+
+    bench.cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
+
+    assert embed_calls == [
+        (cfg["dataset"]["out_dir"], cfg["embedding"]["model_id"], cfg["embedding"]["batch"])
+    ]
+    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
+    assert (tmp_path / "emb.flag").exists()
 
 
-def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path, caplog):
+def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
     # Use fake embeddings dataset on disk
     monkeypatch.setattr(bench, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=4, d=2))
+
+    class CaptureBackend(DummyBE):
+        def __init__(self, dim, metric, **params):
+            super().__init__(dim, metric, **params)
+            self.train_calls: list[int] = []
+            self.upsert_ids: list[list[int]] = []
+
+        def train(self, X):
+            self.train_calls.append(len(X))
+            self.trained = True
+
+        def upsert(self, ids, X):
+            self.upsert_ids.append(list(ids))
+            super().upsert(ids, X)
+
+    captured: dict[str, CaptureBackend] = {}
+
+    def _capture_backend(name, dim, metric, params):
+        safe = dict(params) if params else {}
+        safe.pop("metric", None)
+        inst = CaptureBackend(dim=dim, metric=metric, **safe)
+        captured["instance"] = inst
+        return inst
+
+    monkeypatch.setattr(bench, "_init_backend", _capture_backend)
 
     cfg = {
         "embedding": {"out_hf_dir": str(tmp_path)},
         "backends": {"faiss.flat": {"metric": "ip"}},
     }
-    args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None)
+    backend = "faiss.flat"
+    hf_dir = None
 
-    bench.cmd_build(args, cfg)
-    assert "Stats:" in caplog.text  # hit printing path
+    logs: list[str] = []
+
+    def _sink(message):
+        logs.append(str(message.record["message"]))
+
+    sink_id = bench.logger.add(_sink, level="INFO")
+    try:
+        bench.cmd_build(backend, hf_dir, cfg)
+    finally:
+        bench.logger.remove(sink_id)
+
+    inst = captured["instance"]
+    assert inst.train_calls == [4]
+    assert inst.upsert_ids == [list(range(4))]
+    assert any(msg.startswith("Stats:") for msg in logs)
+
+    # restore logger to avoid leaking stub to other tests
 
 
 def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
@@ -153,35 +224,87 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
         "backends": {"faiss.flat": {"metric": "ip"}},
         "search": {"topk": 3, "queries_file": str(qfile)},
     }
-    args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None, topk=3, queries=str(qfile))
+    backend = "faiss.flat"
+    hf_dir = None
+    topk = 3
+    queries = str(qfile)
 
-    bench.cmd_search(args, cfg)
+    logs: list[str] = []
 
-    out = caplog.text
-    # The search command prints a JSON summary (and [PROFILE] line), not 'Stats:' in this path
-    assert '"backend": "faiss.flat"' in out
-    assert '"recall@k"' in out
+    def _sink(message):
+        logs.append(str(message.record["message"]))
+
+    sink_id = bench.logger.add(_sink, level="INFO")
+    try:
+        bench.cmd_search(backend, hf_dir, topk, queries, cfg)
+    finally:
+        bench.logger.remove(sink_id)
+
+    combined = "\n".join(logs)
+    assert '"backend": "faiss.flat"' in combined
+    assert '"recall@k"' in combined
 
 
 def test_cmd_update_with_dummy_backend(monkeypatch, tmp_path):
     monkeypatch.setattr(bench, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=5, d=2))
+
+    class CaptureBE(DummyBE):
+        def __init__(self, dim, metric, **params):
+            super().__init__(dim, metric, **params)
+            self.train_calls: list[int] = []
+            self.upsert_calls: list[list[int]] = []
+            self.delete_calls: list[list[int]] = []
+
+        def train(self, X):
+            self.train_calls.append(len(X))
+            self.trained = True
+
+        def upsert(self, ids, X):
+            self.upsert_calls.append(list(ids))
+            super().upsert(ids, X)
+
+        def delete(self, ids):
+            ids_list = list(ids)
+            self.delete_calls.append(ids_list)
+
+    captured: dict[str, CaptureBE] = {}
+
+    def _capture_backend(name, dim, metric, params):
+        safe = dict(params) if params else {}
+        safe.pop("metric", None)
+        inst = CaptureBE(dim=dim, metric=metric, **safe)
+        captured["instance"] = inst
+        return inst
+
+    monkeypatch.setattr(bench, "_init_backend", _capture_backend)
+
     cfg = {
         "embedding": {"out_hf_dir": str(tmp_path), "model_id": "m"},
         "backends": {"faiss.flat": {"metric": "ip"}},
         "update": {"add_count": 2, "delete_count": 2},
     }
-    args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None, add=None, delete=None)
-    bench.cmd_update(args, cfg)
+    backend = "faiss.flat"
+    hf_dir = None
+    add_n = None
+    delete = None
+    bench.cmd_update(backend, hf_dir, add_n, delete, cfg)
+
+    inst = captured["instance"]
+    assert inst.train_calls  # backend trained at least once
+    assert inst.upsert_calls[0] == list(range(5))
+    assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
+    assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
 
 
 @pytest.mark.parametrize("verb", ["download", "embed", "build", "search", "update"])
 def test_cli_main_dispatch(monkeypatch, tmp_path, verb):
     # Stub subcommand implementations to do nothing
-    monkeypatch.setattr(bench, "cmd_download", lambda a, c: None)
-    monkeypatch.setattr(bench, "cmd_embed", lambda a, c: None)
-    monkeypatch.setattr(bench, "cmd_build", lambda a, c: None)
-    monkeypatch.setattr(bench, "cmd_search", lambda a, c: None)
-    monkeypatch.setattr(bench, "cmd_update", lambda a, c: None)
+    calls: list[str] = []
+    monkeypatch.setattr(bench, "cmd_download", lambda a, c: calls.append("download"))
+    monkeypatch.setattr(bench, "cmd_embed", lambda a, c: calls.append("embed"))
+    monkeypatch.setattr(bench, "cmd_build", lambda a, c: calls.append("build"))
+    monkeypatch.setattr(bench, "cmd_search", lambda a, c: calls.append("search"))
+    monkeypatch.setattr(bench, "cmd_update", lambda a, c: calls.append("update"))
 
     if verb == "download":
         argv = ["prog", verb, "--size", "small"]
@@ -195,6 +318,8 @@ def test_cli_main_dispatch(monkeypatch, tmp_path, verb):
         argv = ["prog", verb]
     monkeypatch.setattr(sys, "argv", argv)
     bench.main()
+
+    assert calls == [verb]
 
 
 # ---------- Edge cases for helpers ----------
@@ -249,47 +374,53 @@ def test_init_backend_scrubs_reserved(monkeypatch):
     assert "nlist" in be.init_args and be.init_args["nlist"] == 123
 
 
-class Saveable2:
-    def save_to_disk(self, path):
-        # simulate datasets.Dataset.save_to_disk
-        return None
-
-
 def test_cmd_download_no_export(monkeypatch, tmp_path):
     # load_composite returns a saveable dataset
+    saved_paths: list[str] = []
+
+    class Saveable2:
+        def save_to_disk(self, path):
+            saved_paths.append(path)
+
     monkeypatch.setattr(bench, "load_composite", lambda hf_id, split: Saveable2())
+
+    export_calls: list = []
+
     # export_images should not be called (args override to False)
-    monkeypatch.setattr(
-        bench,
-        "export_images",
-        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not export")),
-    )
+    monkeypatch.setattr(bench, "export_images", lambda *a, **kw: export_calls.append(True))
 
     cfg = {
         "dataset": {
             "hf_id": "fake",
-            "out_dir": str(tmp_path),
+            "out_dir": tmp_path,
             "size_splits": {"small": "train[:10]"},
             "export_images": True,  # default True, but args turn it off
         }
     }
-    args = types.SimpleNamespace(size="small", out_dir=None, export_images=False)
-    bench.cmd_download(args, cfg)
+    size = "small"
+    out_dir = None
+    export_images = False
+    bench.cmd_download(size, out_dir, export_images, cfg)
 
-
-class HFOut2:
-    def save_to_disk(self, path):
-        # mimic datasets.DatasetDict.save_to_disk
-        return None
+    assert saved_paths == [tmp_path]
+    assert not export_calls
 
 
 def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
     # Stub embed_images -> returns (ds_out, X, ids, labels)
-    monkeypatch.setattr(
-        bench,
-        "embed_images",
-        lambda raw_dir, model_id, batch: ([], np.ones((2, 3), dtype="float32"), [10, 11], [0, 1]),
-    )
+    embed_calls: list[tuple[str, str, int]] = []
+
+    def _embed_images(raw_dir, model_id, batch):
+        embed_calls.append((raw_dir, model_id, batch))
+        return ImageDatasetWithEmbeddings(np.asarray([]), np.ones((2, 3), dtype="float32"), [10, 11], [0, 1])
+
+    save_calls: list[str] = []
+
+    class HFOut2:
+        def save_to_disk(self, path):
+            save_calls.append(path)
+
+    monkeypatch.setattr(bench, "embed_images", _embed_images)
     monkeypatch.setattr(bench, "to_hf_dataset", lambda X, ids, labels: HFOut2())
 
     cfg = {
@@ -297,18 +428,20 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
         "embedding": {
             "model_id": "cfg-model",
             "batch": 1,
-            "out_dir": str(tmp_path),
-            "out_hf_dir": str(tmp_path),
+            "out_dir": tmp_path,
+            "out_hf_dir": tmp_path,
         },
     }
     # Provide all args to override cfg
-    args = types.SimpleNamespace(
-        model_id="arg-model",
-        batch=7,
-        raw_dir=str(tmp_path),
-        emb_dir=str(tmp_path),
-    )
-    bench.cmd_embed(args, cfg)
+    model_id = "arg-model"
+    batch = 7
+    raw_dir = tmp_path
+    emb_dir = tmp_path
+
+    bench.cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
+
+    assert embed_calls == [(raw_dir, model_id, batch)]
+    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
 
 
 class LazyEmbeds:
@@ -334,20 +467,6 @@ class LazyIds:
         return i
 
 
-# def test_cmd_build_triggers_subsample(monkeypatch, tmp_path):
-#     n = 500001  # force X.shape[0] >= 500000 path
-#     d = 2
-#     ds = {"embedding": LazyEmbeds(n, d), "id": LazyIds(n)}
-#     monkeypatch.setattr(bench, "load_from_disk", lambda p=None: ds)
-
-#     cfg = {
-#         "embedding": {"out_hf_dir": str(tmp_path)},
-#         "backends": {"faiss.flat": {"metric": "ip"}},
-#     }
-#     args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None)
-#     bench.cmd_build(args, cfg)
-
-
 def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(bench, "cmd_download", lambda a, c: calls.append("download"))
@@ -361,8 +480,9 @@ def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
         "embedding": {"model_id": "m", "batch": 1, "out_dir": str(tmp_path), "out_hf_dir": str(tmp_path)},
         "search": {"queries_file": str(tmp_path / "q.txt")},
     }
-    args = types.SimpleNamespace(size="small", backend="faiss.flat")
-    bench.cmd_run_all(args, cfg)
+    size = "small"
+    backend = "faiss.flat"
+    bench.cmd_run_all(size, backend, cfg)
 
     # Expected call order: download, embed, build (baseline), build (chosen), search, update
     assert calls[0] == "download"

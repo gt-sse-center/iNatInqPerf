@@ -8,6 +8,7 @@ from datasets import Dataset, Features, Value, load_from_disk
 from datasets import Sequence as HFSequence
 from PIL import Image
 from transformers import CLIPModel, CLIPProcessor
+from pathlib import Path
 
 _EMBED_MATRIX_NDIM = 2
 
@@ -22,7 +23,7 @@ def pilify(img: Image.Image | np.ndarray) -> Image.Image:
     raise TypeError(msg)
 
 
-def embed_images(raw_dir: str, model_id: str, batch: int) -> tuple[Dataset, np.ndarray, list, list]:
+def embed_images(raw_dir: Path | str, model_id: str, batch: int) -> tuple[Dataset, np.ndarray, list, list]:
     """Embed images from a dataset on disk using a CLIP model."""
     ds = load_from_disk(raw_dir)
     device = "cuda" if torch.cuda.is_available() else "cpu"

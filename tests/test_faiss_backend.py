@@ -38,8 +38,7 @@ def ivfpq_trainset():
 @pytest.mark.parametrize("metric", ["ip", "l2"])
 def test_faiss_flat_lifecycle(metric, small_data):
     ids, X = small_data
-    be = FaissFlat()
-    be.init(dim=2, metric=metric)
+    be = FaissFlat(dim=2, metric=metric)
 
     be.upsert(ids, X)
     st = be.stats()
@@ -69,9 +68,8 @@ def test_faiss_ivfpq_train_and_search_with_large_training(ivfpq_trainset, small_
     train_ids, X_train = ivfpq_trainset
     ids, X = small_data
 
-    be = FaissIVFPQ()
     # Use fewer PQ centroids (nbits=4 -> 16) so 300 training points suffice without warnings
-    be.init(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
 
     # training on sufficient dataset (silence FAISS native stderr warnings)
     _buf = io.StringIO()
@@ -108,9 +106,8 @@ def test_faiss_ivfpq_l2_metric_delete_and_drop(ivfpq_trainset, small_data):
     train_ids, X_train = ivfpq_trainset
     ids, X = small_data
 
-    be = FaissIVFPQ()
     # Fewer centroids to prevent FAISS training warnings
-    be.init(dim=2, metric="l2", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric="l2", nlist=2, m=1, nbits=4, nprobe=2)
     _buf = io.StringIO()
     with contextlib.redirect_stderr(_buf):
         be.train(X_train)
@@ -143,8 +140,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
     train_ids, X_train = ivfpq_trainset
     ids, X = small_data
 
-    be = FaissIVFPQ()
-    be.init(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=1)
+    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=1)
     _buf = io.StringIO()
     with contextlib.redirect_stderr(_buf):
         be.train(X_train)
@@ -172,8 +168,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
 def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
     """Cover branch where topk > ntotal and deleting non-existent IDs is a no-op."""
     ids, X = small_data
-    be = FaissFlat()
-    be.init(dim=2, metric="ip")
+    be = FaissFlat(dim=2, metric="ip")
     be.upsert(ids, X)
 
     Q = np.array([[0.2, 0.9]], dtype="float32")
@@ -198,8 +193,7 @@ def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
     assert fb_mod._metric_to_faiss("cosine") == fb_mod.faiss.METRIC_INNER_PRODUCT
 
     # Build a real IVFPQ index and ensure unwrap hits the IVF layer
-    be = FaissIVFPQ()
-    be.init(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
     _buf = io.StringIO()
     with contextlib.redirect_stderr(_buf):
         be.train(ivfpq_trainset[1])
@@ -211,8 +205,7 @@ def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
 def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data):
     # Cosine path should map to inner-product internally
     ids, X = small_data
-    be = FaissIVFPQ()
-    be.init(dim=2, metric="cosine", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric="cosine", nlist=2, m=1, nbits=4, nprobe=2)
     _buf = io.StringIO()
     with contextlib.redirect_stderr(_buf):
         be.train(ivfpq_trainset[1])
@@ -229,8 +222,7 @@ def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data
 
 def test_faiss_ivfpq_empty_delete_noop(ivfpq_trainset, small_data):
     ids, X = small_data
-    be = FaissIVFPQ()
-    be.init(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
     _buf = io.StringIO()
     with contextlib.redirect_stderr(_buf):
         be.train(ivfpq_trainset[1])
@@ -267,9 +259,8 @@ def test_metric_to_faiss_ip_mapping():
 # def test_faiss_ivfpq_reduces_nlist_and_clamps_nprobe(small_data):
 #     """Cover train() branch that rebuilds with smaller nlist and clamps nprobe to nlist."""
 #     ids, X = small_data
-#     be = FaissIVFPQ()
 #     # Start with large nlist, tiny PQ (nbits=2, m=1) so training with small set succeeds and triggers reduce.
-#     be.init(dim=2, metric="ip", nlist=64, m=1, nbits=2)  # nprobe defaults to 32
+#     be = FaissIVFPQ(dim=2, metric="ip", nlist=64, m=1, nbits=2)  # nprobe defaults to 32
 #     _, X_train = ivfpq_trainset  # 10,240 x 2
 #     #X_train = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.1], [0.2, 0.3], [0.9, 0.2], [0.1, 0.8], [0.3, 0.4], [0.7, 0.6]], dtype="float32")
 #     _buf = io.StringIO()

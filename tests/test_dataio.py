@@ -1,8 +1,6 @@
 # tests/test_dataio.py
-import contextlib
 import csv
 import importlib
-import io
 from typing import Any, List
 
 import numpy as np
@@ -51,15 +49,13 @@ def fake_concat(monkeypatch):
     monkeypatch.setattr(dataio, "concatenate_datasets", _concat, raising=True)
 
 
-def test_load_composite_all_parts_fail_falls_back_to_train(fake_loader):
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        ds = load_composite("hf/any", "bad + worse")
+def test_load_composite_all_parts_fail_falls_back_to_train(fake_loader, caplog):
+    ds = load_composite("hf/any", "bad + worse")
 
     splits = [s for _, s in fake_loader]
     assert splits == ["bad", "worse", "train"]
     assert [row["split"] for row in ds] == ["train"]
-    assert "[DATAIO] Warning: failed to load dataset split 'bad'" in buf.getvalue()
+    assert "[DATAIO] Warning: failed to load dataset split 'bad'" in caplog.text
 
 
 def test_load_composite_single_part_avoids_concat(monkeypatch):
@@ -101,7 +97,7 @@ def test_export_images_writes_jpegs_and_manifest(tmp_path):
     )
 
     export_dir = tmp_path / "images_out"
-    manifest_path = export_images(ds, str(export_dir))
+    manifest_path = export_images(ds, export_dir)
 
     with open(manifest_path, "r", encoding="utf-8") as fh:
         rows = list(csv.reader(fh))

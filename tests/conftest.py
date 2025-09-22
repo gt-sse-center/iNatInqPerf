@@ -2,7 +2,11 @@
 """Pytest configuration for shared test setup."""
 
 import importlib
+import logging
 import os
+
+import pytest
+from loguru import logger
 
 # Keep thread counts low and avoid at-fork init issues that can trip FAISS/Torch on macOS
 os.environ.setdefault("OMP_NUM_THREADS", "1")

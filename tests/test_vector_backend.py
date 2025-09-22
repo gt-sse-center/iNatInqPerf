@@ -16,11 +16,13 @@ def test_vectorbackend_is_abstract():
 
 
 def test_partial_implementation_rejected():
-    # Missing required abstract methods -> still abstract
     class Partial(VectorBackend):
+        """Missing required abstract methods -> still abstract."""
+
         name = "partial"
 
-        def init(self, dim: int, metric: str, **params): ...
+        def __init__(self, dim: int = 0, metric: str = "", **params):
+            super().__init__()
 
         # upsert/search/stats/drop/delete not implemented
 
@@ -36,19 +38,13 @@ class DummyBackend(VectorBackend):
 
     name = "dummy"
 
-    def __init__(self):
-        self._dim = None
-        self._metric = None
-        self._X = None  # ndarray [N, D]
-        self._ids = None  # ndarray [N]
-        self._dropped = False
-
-    def init(self, dim: int, metric: str, **params):
+    def __init__(self, dim: int, metric: str, **params):
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
         self._metric = metric.lower()
         self._X = np.zeros((0, dim), dtype="float32")
         self._ids = np.zeros((0,), dtype="int64")
+        self._dropped = False
 
     def train(self, X_train: np.ndarray):
         # Should be a no-op for this dummy; just validate dims
@@ -133,8 +129,7 @@ def tiny_dataset():
 def test_lifecycle_and_shapes(metric, tiny_dataset):
     ids, X = tiny_dataset
 
-    be = DummyBackend()
-    be.init(dim=2, metric=metric)
+    be = DummyBackend(dim=2, metric=metric)
 
     # train should be a no-op but must accept input
     be.train(X)
@@ -175,8 +170,7 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
 
 def test_upsert_replaces_existing(tiny_dataset):
     ids, X = tiny_dataset
-    be = DummyBackend()
-    be.init(dim=2, metric="ip")
+    be = DummyBackend(dim=2, metric="ip")
     be.upsert(ids, X)
 
     # Upsert same ids with shifted vectors

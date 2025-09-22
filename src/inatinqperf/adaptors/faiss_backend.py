@@ -1,10 +1,16 @@
 """FAISS vector database backend adaptor."""
 
-import numpy as np
-import faiss
-from typing import Any
 from collections.abc import Sequence
-from .base import VectorBackend
+from typing import Any
+
+import faiss
+import numpy as np
+from loguru import logger
+
+from inatinqperf.adaptors.base import VectorBackend
+
+
+# TODO(Varun): Use Metric enum instead of strings
 
 
 def _metric_to_faiss(metric: str) -> int:
@@ -17,14 +23,10 @@ class FaissFlat(VectorBackend):
 
     name = "faiss.flat"
 
-    def __init__(self) -> None:
+    def __init__(self, dim: int, metric: str = "ip", **params) -> None:  # noqa: ARG002
         """Initialize FAISS Flat index."""
-        self.index = None
-        self.metric = "ip"
-        self.dim = None
+        super().__init__()
 
-    def init(self, dim: int, metric: str, **params) -> None:
-        """Initialize FAISS Flat index."""
         self.dim = dim
         self.metric = metric.lower()
         base = faiss.IndexFlatIP(dim) if self.metric in ("ip", "cosine") else faiss.IndexFlatL2(dim)
@@ -69,7 +71,7 @@ def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
             if ivf is not None:
                 return ivf
         except Exception:
-            print("[FAISS] Warning: extract_index_ivf failed")
+            logger.warning("[FAISS] Warning: extract_index_ivf failed")
 
     # Fallback: walk .index fields until we find .nlist
     node = base
@@ -88,17 +90,10 @@ class FaissIVFPQ(VectorBackend):
 
     name = "faiss.ivfpq"
 
-    def __init__(self) -> None:
+    def __init__(self, dim: int, metric: str = "ip", **params) -> None:
         """Initialize FAISS IVF-PQ index."""
-        self.index = None
-        self.metric = "ip"
-        self.dim = None
-        self.nprobe = 32
-        self.m = 64
-        self.nbits = 8
+        super().__init__()
 
-    def init(self, dim: int, metric: str, **params) -> None:
-        """Initialize FAISS IVF-PQ index."""
         self.dim = dim
         self.metric = metric.lower()
         nlist = int(params.get("nlist", 32768))
@@ -178,9 +173,3 @@ class FaissIVFPQ(VectorBackend):
     def drop(self) -> None:
         """Drop the index."""
         self.index = None
-
-
-BACKENDS = {
-    "faiss.flat": FaissFlat,
-    "faiss.ivfpq": FaissIVFPQ,
-}

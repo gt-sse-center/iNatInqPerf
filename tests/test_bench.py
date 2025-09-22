@@ -1,8 +1,9 @@
 # tests/test_bench.py
 import io
+import pickle
 import sys
 import types
-import pickle
+
 import numpy as np
 import pytest
 
@@ -11,17 +12,13 @@ import inatinqperf.bench.bench as bench
 
 # ---------- Safe dummy backend ----------
 class DummyBE:
-    def __init__(self):
-        self.inited = False
-        self.trained = False
-        self.ntotal = 0
-        self.init_args = None
-
-    def init(self, dim, metric, **params):
+    def __init__(self, dim, metric, **params):
         self.inited = True
+        self.trained = False
         self.dim = dim
         self.metric = metric
         self.params = params
+        self.ntotal = 0
         self.init_args = {"dim": dim, "metric": metric, **params}
 
     def train(self, X):
@@ -47,8 +44,8 @@ class DummyBE:
 @pytest.fixture(autouse=True)
 def patch_backends(monkeypatch):
     """Ensure bench always uses Dummy backend instead of FAISS."""
-    monkeypatch.setitem(bench.ALL_BACKENDS, "faiss.flat", DummyBE)
-    monkeypatch.setitem(bench.ALL_BACKENDS, "faiss.ivfpq", DummyBE)
+    monkeypatch.setitem(bench.BACKENDS, "faiss.flat", DummyBE)
+    monkeypatch.setitem(bench.BACKENDS, "faiss.ivfpq", DummyBE)
     # If bench references classes directly
     monkeypatch.setattr(bench, "FaissFlat", DummyBE, raising=False)
     monkeypatch.setattr(bench, "FaissIVFPQ", DummyBE, raising=False)
@@ -114,7 +111,7 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
     bench.cmd_embed(args, cfg)
 
 
-def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path, capsys):
+def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path, caplog):
     # Use fake embeddings dataset on disk
     monkeypatch.setattr(bench, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=4, d=2))
 
@@ -125,11 +122,10 @@ def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path, capsys):
     args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None)
 
     bench.cmd_build(args, cfg)
-    out = capsys.readouterr().out
-    assert "Stats:" in out  # hit printing path
+    assert "Stats:" in caplog.text  # hit printing path
 
 
-def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, capsys):
+def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
     # Ensure search loads a DummyBE instead of FAISS from pickle (paranoia; may not be used)
     monkeypatch.setattr(pickle, "load", lambda f: DummyBE())
     monkeypatch.setattr(bench, "embed_text", lambda qs, mid: np.ones((len(qs), 2), dtype="float32"))
@@ -160,7 +156,8 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, capsys):
     args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None, topk=3, queries=str(qfile))
 
     bench.cmd_search(args, cfg)
-    out = capsys.readouterr().out
+
+    out = caplog.text
     # The search command prints a JSON summary (and [PROFILE] line), not 'Stats:' in this path
     assert '"backend": "faiss.flat"' in out
     assert '"recall@k"' in out
@@ -242,7 +239,7 @@ class CaptureBE(DummyBE):
 
 def test_init_backend_scrubs_reserved(monkeypatch):
     # Inject capture backend under a custom key
-    monkeypatch.setitem(bench.ALL_BACKENDS, "capture", CaptureBE)
+    monkeypatch.setitem(bench.BACKENDS, "capture", CaptureBE)
     params = {"metric": "ip", "dim": 999, "name": "x", "nlist": 123}
     be = bench._init_backend("capture", dim=64, metric="ip", params=params)
     # Reserved keys must not be forwarded twice

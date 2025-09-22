@@ -1,9 +1,10 @@
 """Abstract base class for vector database backends."""
 
 from abc import ABC, abstractmethod
-import numpy as np
-from typing import Any
 from collections.abc import Sequence
+from typing import Any
+
+import numpy as np
 
 
 class VectorBackend(ABC):
@@ -12,10 +13,13 @@ class VectorBackend(ABC):
     name: str
 
     @abstractmethod
+<<<<<<< HEAD
     def init(self, dim: int, metric: str, **params) -> None:
         """Initialize the index with given dimension and metric."""
 
     @abstractmethod
+=======
+>>>>>>> bbca1381302cbb3e9dba253bdb3688d38486fc71
     def train(self, x_train: np.ndarray) -> None:
         """Train the index with given training vectors, if needed."""
 

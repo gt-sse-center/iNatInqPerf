@@ -1,13 +1,15 @@
 """Lightweight in-process profiler."""
 
+import datetime
+import json
 import os
 import time
-import json
-from types import TracebackType
-import psutil
 import tracemalloc
-import datetime
 from pathlib import Path
+from types import TracebackType
+
+import psutil
+from loguru import logger
 
 
 class Profiler:
@@ -20,13 +22,17 @@ class Profiler:
     For CPU flamegraphs, run the command via py-spy externally.
     """
 
-    def __init__(self, step: str, results_dir: str = ".results") -> None:
+    def __init__(self, step: str, results_dir: Path = Path(".results")) -> None:
         """Initialize profiler."""
         self.step = step
         self.results_dir = results_dir
-        Path(results_dir).mkdir(parents=True, exist_ok=True)
+        results_dir.mkdir(parents=True, exist_ok=True)
         self.proc = psutil.Process(os.getpid())
         self.rss_samples = []
+
+        self._t0 = None
+        self._cpu0 = None
+        self.metrics = {}
 
     def __enter__(self) -> "Profiler":
         """Start profiling context."""
@@ -40,14 +46,14 @@ class Profiler:
         try:
             self.rss_samples.append(self.proc.memory_info().rss)
         except Exception:
-            print("[PROFILE] Warning: failed to sample RSS")
+            logger.info("[PROFILE] Warning: failed to sample RSS")
 
     def __exit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
-    ) -> bool | None:
+    ) -> None:
         wall = time.perf_counter() - self._t0
         cpu = time.process_time() - self._cpu0
         _, peak = tracemalloc.get_traced_memory()
@@ -65,8 +71,11 @@ class Profiler:
             "rss_max_mb": round(rss_max, 3),
             "profiler": "builtin",
         }
+
         ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
         path = Path(self.results_dir) / f"step-{self.step}-{ts}.json"
+
         with path.open("w", encoding="utf-8") as f:
             json.dump(self.metrics, f, indent=2)
-        print(f"[PROFILE] {self.metrics}")
+
+        logger.info(f"[PROFILE] {self.metrics}")

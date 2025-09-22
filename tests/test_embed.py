@@ -3,8 +3,8 @@ import importlib
 
 import numpy as np
 import pytest
-from PIL import Image
 import torch
+from PIL import Image
 
 embed_module = importlib.import_module("inatinqperf.utils.embed")
 embed = importlib.reload(embed_module)

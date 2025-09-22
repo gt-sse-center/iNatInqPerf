@@ -9,7 +9,7 @@ Subcommands:
   run-all   -> download->embed->build(Faiss Flat + chosen backend)->search->update
 """
 
-import argparse
+import argparse  # TODO(Varun): Consider using `typer` instead
 import json
 import time
 from collections.abc import Mapping
@@ -20,25 +20,24 @@ import faiss
 import numpy as np
 import yaml
 from datasets import load_from_disk
+from loguru import logger
 
+from inatinqperf.adaptors import BACKENDS
+from inatinqperf.utils.dataio import export_images, load_composite
+from inatinqperf.utils.embed import embed_images, embed_text, to_hf_dataset
 from inatinqperf.utils.profiler import Profiler
-from inatinqperf.utils.dataio import load_composite, export_images
-from inatinqperf.utils.embed import embed_images, to_hf_dataset, embed_text
-from inatinqperf.adaptors.faiss_backend import BACKENDS as FAISS_BACKENDS
 
-ALL_BACKENDS = {}
-ALL_BACKENDS.update(FAISS_BACKENDS)
-
+# Get the `inatinqperf` directory which is the grandparent directory of this file.
 ROOT = Path(__file__).resolve().parents[1]
 
 SAMPLE_SIZE = 500_000  # max samples for training if needed
 BENCH_CFG = ROOT / "configs" / "bench.yaml"
 
 
-def load_cfg(path: str | Path) -> Mapping[str, Any]:
+def load_cfg(path: Path) -> Mapping[str, Any]:
     """Load YAML config file."""
-    print(f"Loading config: {path}")
-    with Path.open(path) as f:
+    logger.info(f"Loading config: {path}")
+    with path.open() as f:
         return yaml.safe_load(f)
 
 
@@ -83,8 +82,8 @@ def cmd_download(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
         if export:
             export_dir = Path(out_dir) / "images"
             manifest = export_images(ds, export_dir)
-            print(f"Exported images to: {export_dir}\nManifest: {manifest}")
-    print(f"Saved HF dataset to: {out_dir}")
+            logger.info(f"Exported images to: {export_dir}\nManifest: {manifest}")
+    logger.info(f"Saved HF dataset to: {out_dir}")
 
 
 def cmd_embed(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
@@ -100,22 +99,21 @@ def cmd_embed(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
         _, x, ids, labels = embed_images(raw_dir, model_id, batch)
         ds2 = to_hf_dataset(x, ids, labels)
         ds2.save_to_disk(out_hf_dir)
-        print(f"Embeddings: {x.shape} -> {out_hf_dir}")
+        logger.info(f"Embeddings: {x.shape} -> {out_hf_dir}")
 
 
 def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, Any]) -> dict:
-    """Instantiate backend and call init(), scrubbing reserved keys from params.
+    """Instantiate backend, scrubbing reserved keys from params.
 
     Prevents errors like: TypeError: ... init() got multiple values for keyword 'metric'.
     """
-    cls = ALL_BACKENDS[backend_name]
-    be = cls()
+    backend = BACKENDS[backend_name]
+
     # Avoid passing duplicate values for explicit kwargs
     safe_params = dict(params) if params else {}
     for k in ("metric", "dim", "name"):
         safe_params.pop(k, None)
-    be.init(dim=dim, metric=metric, **safe_params)
-    return be
+    return backend(dim=dim, metric=metric, **safe_params)
 
 
 def cmd_build(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
@@ -136,7 +134,7 @@ def cmd_build(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
         )
         ids = np.array(ds["id"], dtype="int64")
         be.upsert(ids, x)
-    print("Stats:", be.stats())
+    logger.info("Stats:", be.stats())
 
 
 def cmd_search(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
@@ -188,7 +186,7 @@ def cmd_search(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
         "recall@k": rec,
         "ntotal": int(x.shape[0]),
     }
-    print(json.dumps(stats, indent=2))
+    logger.info(json.dumps(stats, indent=2))
 
 
 def cmd_update(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
@@ -220,7 +218,7 @@ def cmd_update(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
         del_ids = list(add_ids[:del_n])
         be.delete(del_ids)
 
-    print("Update complete.", be.stats())
+    logger.info("Update complete.", be.stats())
 
 
 def cmd_run_all(args: argparse.Namespace, cfg: Mapping[str, Any]) -> None:
@@ -285,19 +283,19 @@ def main() -> None:
     sp.set_defaults(func=cmd_embed)
 
     sp = sub.add_parser("build", help="Build index for a backend")
-    sp.add_argument("--backend", required=True, choices=list(ALL_BACKENDS.keys()))
+    sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
     sp.add_argument("--hf_dir", default=None)
     sp.set_defaults(func=cmd_build)
 
     sp = sub.add_parser("search", help="Profile search on a backend and compute recall@K vs exact baseline")
-    sp.add_argument("--backend", required=True, choices=list(ALL_BACKENDS.keys()))
+    sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
     sp.add_argument("--hf_dir", default=None)
     sp.add_argument("--topk", type=int, default=None)
     sp.add_argument("--queries", default=None)
     sp.set_defaults(func=cmd_search)
 
     sp = sub.add_parser("update", help="Upsert + delete workflow on a backend")
-    sp.add_argument("--backend", required=True, choices=list(ALL_BACKENDS.keys()))
+    sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
     sp.add_argument("--hf_dir", default=None)
     sp.add_argument("--add", type=int, default=None)
     sp.add_argument("--delete", type=int, default=None)

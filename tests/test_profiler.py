@@ -12,7 +12,7 @@ def test_profiler_writes_metrics_and_json(tmp_path):
     # Patch results_dir so output is written into tmp_path
     step_name = "unit"
     results_dir = tmp_path / ".results"
-    p = profiler.Profiler(step=step_name, results_dir=str(results_dir))
+    p = profiler.Profiler(step=step_name, results_dir=results_dir)
 
     with p as prof:
         # Do some work and sample memory
@@ -45,7 +45,7 @@ def test_profiler_sample_handles_exceptions(monkeypatch, tmp_path):
     # Patch proc.memory_info to raise
     step_name = "failcase"
     results_dir = tmp_path / ".results"
-    p = profiler.Profiler(step=step_name, results_dir=str(results_dir))
+    p = profiler.Profiler(step=step_name, results_dir=results_dir)
     monkeypatch.setattr(p.proc, "memory_info", lambda: (_ for _ in ()).throw(RuntimeError("bad")))
 
     with p:
@@ -56,12 +56,12 @@ def test_profiler_multiple_steps_create_distinct_files(tmp_path):
     results_dir = tmp_path / ".results"
 
     # First step
-    p1 = profiler.Profiler("step1", results_dir=str(results_dir))
+    p1 = profiler.Profiler("step1", results_dir=results_dir)
     with p1:
         time.sleep(0.001)
 
     # Second step
-    p2 = profiler.Profiler("step2", results_dir=str(results_dir))
+    p2 = profiler.Profiler("step2", results_dir=results_dir)
     with p2:
         time.sleep(0.001)
 

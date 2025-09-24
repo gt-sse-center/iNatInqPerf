@@ -455,9 +455,6 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
     assert embed_calls == [(raw_dir, model_id, batch)]
     assert save_calls == [cfg["embedding"]["out_hf_dir"]]
 
-    assert embed_calls == [(args.raw_dir, args.model_id, args.batch)]
-    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
-
 
 class LazyEmbeds:
     def __init__(self, n, d):

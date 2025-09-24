@@ -22,7 +22,7 @@ class VectorBackend(ABC):
 
     @abstractmethod
     def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:
-        """Initialize the index with given dimension and metric."""
+        """Search for top-k nearest neighbors."""
         ...
 
     @abstractmethod

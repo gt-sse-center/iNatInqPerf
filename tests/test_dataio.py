@@ -1,26 +1,21 @@
 # tests/test_dataio.py
 import csv
-import importlib
 from typing import Any, List
 
 import numpy as np
 import pytest
 from PIL import Image
 
-_dataio_module = importlib.import_module("inatinqperf.utils.dataio")
-dataio = importlib.reload(_dataio_module)
-load_composite = dataio.load_composite
-export_images = dataio.export_images
+from inatinqperf.utils import dataio
+from inatinqperf.utils.dataio import load_composite, export_images
 
 
 class FakeDataset(list):
     """Minimal stand-in for `datasets.Dataset` supporting iteration and indexing."""
 
-    pass
 
-
-@pytest.fixture()
-def fake_loader(monkeypatch):
+@pytest.fixture(name="fake_loader")
+def fake_loader_fixture(monkeypatch):
     """Monkeypatch `load_dataset` to capture split requests."""
 
     calls: List[Any] = []
@@ -35,8 +30,8 @@ def fake_loader(monkeypatch):
     return calls
 
 
-@pytest.fixture()
-def fake_concat(monkeypatch):
+@pytest.fixture(name="fake_concat")
+def fake_concat_fixture(monkeypatch):
     """Monkeypatch `concatenate_datasets` to track usage and join iterables."""
 
     def _concat(parts):
@@ -50,7 +45,7 @@ def fake_concat(monkeypatch):
 
 
 def test_load_composite_all_parts_fail_falls_back_to_train(fake_loader, caplog):
-    ds = load_composite("hf/any", "bad + worse")
+    ds = load_composite("hf/any", ("bad", "worse"))
 
     splits = [s for _, s in fake_loader]
     assert splits == ["bad", "worse", "train"]
@@ -72,13 +67,13 @@ def test_load_composite_single_part_avoids_concat(monkeypatch):
         raising=True,
     )
 
-    ds = load_composite("hf/some", "train[:4]")
+    ds = load_composite("hf/some", ("train[:4]",))
     assert isinstance(ds, FakeDataset)
     assert ds[0]["split"] == "train[:4]"
 
 
 def test_load_composite_multiple_parts_concatenates(fake_loader, fake_concat):
-    ds = load_composite("hf/any", "train[:2] + train[:3]")
+    ds = load_composite("hf/any", ("train[:2]", "train[:3]"))
     assert isinstance(ds, FakeDataset)
     assert getattr(ds, "concatenated", False) is True
     splits = [s for _, s in fake_loader]

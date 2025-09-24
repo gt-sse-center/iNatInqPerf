@@ -4,9 +4,8 @@ import importlib
 import numpy as np
 import pytest
 
-base_module = importlib.import_module("inatinqperf.adaptors.base")
-base = importlib.reload(base_module)
-VectorBackend = base.VectorBackend
+from inatinqperf.adaptors import base
+from inatinqperf.adaptors.base import VectorBackend
 
 
 def test_vectorbackend_is_abstract():
@@ -18,8 +17,6 @@ def test_vectorbackend_is_abstract():
 def test_partial_implementation_rejected():
     class Partial(VectorBackend):
         """Missing required abstract methods -> still abstract."""
-
-        name = "partial"
 
         def __init__(self, dim: int = 0, metric: str = "", **params):
             super().__init__()
@@ -36,9 +33,9 @@ class DummyBackend(VectorBackend):
     Implements brute-force search in-memory to validate shapes & lifecycle.
     """
 
-    name = "dummy"
-
     def __init__(self, dim: int, metric: str, **params):
+        super().__init__()
+
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
         self._metric = metric.lower()

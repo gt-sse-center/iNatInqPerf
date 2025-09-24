@@ -7,7 +7,8 @@ import types
 import numpy as np
 import pytest
 
-import inatinqperf.bench.bench as bench
+from inatinqperf.bench import bench
+from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
 # ---------- Safe dummy backend ----------
@@ -79,14 +80,16 @@ def test_cmd_download_with_stubs(monkeypatch, tmp_path):
     cfg = {
         "dataset": {
             "hf_id": "fake",
-            "out_dir": str(tmp_path),
+            "out_dir": tmp_path,
             "size_splits": {"small": "train[:10]"},
             "export_images": True,
         }
     }
-    args = types.SimpleNamespace(size="small", out_dir=None, export_images=None)
+    size = "small"
+    out_dir = None
+    export_images = None
 
-    bench.cmd_download(args, cfg)
+    bench.cmd_download(size, out_dir, export_images, cfg)
 
     assert (tmp_path / "saved.flag").exists()
     assert export_dirs == [tmp_path / "images"]
@@ -99,7 +102,9 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
 
     def _embed_images(raw_dir, model_id, batch):
         embed_calls.append((raw_dir, model_id, batch))
-        return [], np.ones((3, 4), dtype="float32"), [0, 1, 2], [0, 1, 2]
+        return ImageDatasetWithEmbeddings(
+            np.asarray([]), np.ones((3, 4), dtype="float32"), [0, 1, 2], [0, 1, 2]
+        )
 
     # Stub to_hf_dataset -> save_to_disk
     save_calls: list[str] = []
@@ -113,17 +118,27 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
     monkeypatch.setattr(bench, "to_hf_dataset", lambda X, ids, labels: HFSaver())
 
     cfg = {
-        "dataset": {"out_dir": str(tmp_path)},
+        "dataset": {"out_dir": tmp_path},
         "embedding": {
             "model_id": "openai/clip",
             "batch": 2,
-            "out_dir": str(tmp_path),
-            "out_hf_dir": str(tmp_path),
+            "out_dir": tmp_path,
+            "out_hf_dir": tmp_path,
         },
     }
-    args = types.SimpleNamespace(model_id=None, batch=None, raw_dir=None, emb_dir=None)
 
-    bench.cmd_embed(args, cfg)
+    model_id = None
+    batch = None
+    raw_dir = None
+    emb_dir = None
+
+    bench.cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
+
+    assert embed_calls == [
+        (cfg["dataset"]["out_dir"], cfg["embedding"]["model_id"], cfg["embedding"]["batch"])
+    ]
+    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
+    assert (tmp_path / "emb.flag").exists()
 
     assert embed_calls == [
         (cfg["dataset"]["out_dir"], cfg["embedding"]["model_id"], cfg["embedding"]["batch"])
@@ -165,7 +180,8 @@ def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
         "embedding": {"out_hf_dir": str(tmp_path)},
         "backends": {"faiss.flat": {"metric": "ip"}},
     }
-    args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None)
+    backend = "faiss.flat"
+    hf_dir = None
 
     logs: list[str] = []
 
@@ -174,7 +190,7 @@ def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
 
     sink_id = bench.logger.add(_sink, level="INFO")
     try:
-        bench.cmd_build(args, cfg)
+        bench.cmd_build(backend, hf_dir, cfg)
     finally:
         bench.logger.remove(sink_id)
 
@@ -214,7 +230,10 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
         "backends": {"faiss.flat": {"metric": "ip"}},
         "search": {"topk": 3, "queries_file": str(qfile)},
     }
-    args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None, topk=3, queries=str(qfile))
+    backend = "faiss.flat"
+    hf_dir = None
+    topk = 3
+    queries = str(qfile)
 
     logs: list[str] = []
 
@@ -223,7 +242,7 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
 
     sink_id = bench.logger.add(_sink, level="INFO")
     try:
-        bench.cmd_search(args, cfg)
+        bench.cmd_search(backend, hf_dir, topk, queries, cfg)
     finally:
         bench.logger.remove(sink_id)
 
@@ -270,8 +289,17 @@ def test_cmd_update_with_dummy_backend(monkeypatch, tmp_path):
         "backends": {"faiss.flat": {"metric": "ip"}},
         "update": {"add_count": 2, "delete_count": 2},
     }
-    args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None, add=None, delete=None)
-    bench.cmd_update(args, cfg)
+    backend = "faiss.flat"
+    hf_dir = None
+    add_n = None
+    delete = None
+    bench.cmd_update(backend, hf_dir, add_n, delete, cfg)
+
+    inst = captured["instance"]
+    assert inst.train_calls  # backend trained at least once
+    assert inst.upsert_calls[0] == list(range(5))
+    assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
+    assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
 
     inst = captured["instance"]
     assert inst.train_calls  # backend trained at least once
@@ -376,15 +404,17 @@ def test_cmd_download_no_export(monkeypatch, tmp_path):
     cfg = {
         "dataset": {
             "hf_id": "fake",
-            "out_dir": str(tmp_path),
+            "out_dir": tmp_path,
             "size_splits": {"small": "train[:10]"},
             "export_images": True,  # default True, but args turn it off
         }
     }
-    args = types.SimpleNamespace(size="small", out_dir=None, export_images=False)
-    bench.cmd_download(args, cfg)
+    size = "small"
+    out_dir = None
+    export_images = False
+    bench.cmd_download(size, out_dir, export_images, cfg)
 
-    assert saved_paths == [str(tmp_path)]
+    assert saved_paths == [tmp_path]
     assert not export_calls
 
 
@@ -394,7 +424,7 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
 
     def _embed_images(raw_dir, model_id, batch):
         embed_calls.append((raw_dir, model_id, batch))
-        return [], np.ones((2, 3), dtype="float32"), [10, 11], [0, 1]
+        return ImageDatasetWithEmbeddings(np.asarray([]), np.ones((2, 3), dtype="float32"), [10, 11], [0, 1])
 
     save_calls: list[str] = []
 
@@ -410,18 +440,20 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
         "embedding": {
             "model_id": "cfg-model",
             "batch": 1,
-            "out_dir": str(tmp_path),
-            "out_hf_dir": str(tmp_path),
+            "out_dir": tmp_path,
+            "out_hf_dir": tmp_path,
         },
     }
     # Provide all args to override cfg
-    args = types.SimpleNamespace(
-        model_id="arg-model",
-        batch=7,
-        raw_dir=str(tmp_path),
-        emb_dir=str(tmp_path),
-    )
-    bench.cmd_embed(args, cfg)
+    model_id = "arg-model"
+    batch = 7
+    raw_dir = tmp_path
+    emb_dir = tmp_path
+
+    bench.cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
+
+    assert embed_calls == [(raw_dir, model_id, batch)]
+    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
 
     assert embed_calls == [(args.raw_dir, args.model_id, args.batch)]
     assert save_calls == [cfg["embedding"]["out_hf_dir"]]
@@ -450,20 +482,6 @@ class LazyIds:
         return i
 
 
-# def test_cmd_build_triggers_subsample(monkeypatch, tmp_path):
-#     n = 500001  # force X.shape[0] >= 500000 path
-#     d = 2
-#     ds = {"embedding": LazyEmbeds(n, d), "id": LazyIds(n)}
-#     monkeypatch.setattr(bench, "load_from_disk", lambda p=None: ds)
-
-#     cfg = {
-#         "embedding": {"out_hf_dir": str(tmp_path)},
-#         "backends": {"faiss.flat": {"metric": "ip"}},
-#     }
-#     args = types.SimpleNamespace(backend="faiss.flat", hf_dir=None)
-#     bench.cmd_build(args, cfg)
-
-
 def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(bench, "cmd_download", lambda a, c: calls.append("download"))
@@ -477,8 +495,9 @@ def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
         "embedding": {"model_id": "m", "batch": 1, "out_dir": str(tmp_path), "out_hf_dir": str(tmp_path)},
         "search": {"queries_file": str(tmp_path / "q.txt")},
     }
-    args = types.SimpleNamespace(size="small", backend="faiss.flat")
-    bench.cmd_run_all(args, cfg)
+    size = "small"
+    backend = "faiss.flat"
+    bench.cmd_run_all(size, backend, cfg)
 
     # Expected call order: download, embed, build (baseline), build (chosen), search, update
     assert calls[0] == "download"

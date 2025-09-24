@@ -9,8 +9,6 @@ import numpy as np
 class VectorBackend(ABC):
     """Abstract base class for vector database backends."""
 
-    name: str
-
     @abstractmethod
     def train(self, x_train: np.ndarray) -> None:
         """Train the index with given training vectors, if needed."""

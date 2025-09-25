@@ -12,7 +12,7 @@ embedding:
   model_id: "openai/clip-vit-base-patch32"
   batch: 16
   out_dir: "data/emb"
-  out_hf_dir: "data/emb_hf"
+  out_hf_dir: "data/emb-hf"
 
 backends:
   faiss.flat:

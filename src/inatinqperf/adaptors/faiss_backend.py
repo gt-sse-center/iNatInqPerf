@@ -2,13 +2,28 @@
 
 from collections.abc import Sequence
 
-import faiss
 import numpy as np
 from loguru import logger
 
 from inatinqperf.adaptors.base import VectorBackend
 
 # TODO(Varun): Use Metric enum instead of strings
+
+_FAISS: object | None = None
+
+
+def _lazy_faiss() -> object:
+    """Import faiss on demand so non-FAISS commands avoid hard dependency."""
+
+    global _FAISS  # noqa: PLW0603
+    if _FAISS is None:
+        try:
+            import faiss  # noqa: PLC0415
+        except ModuleNotFoundError as exc:  # pragma: no cover - bubble up to caller
+            msg = "Faiss is required; install `faiss-cpu` or `faiss-gpu`."
+            raise ModuleNotFoundError(msg) from exc
+        _FAISS = faiss
+    return _FAISS
 
 
 class FaissFlat(VectorBackend):
@@ -20,6 +35,7 @@ class FaissFlat(VectorBackend):
 
         self.dim = dim
         self.metric = metric.lower()
+        faiss = _lazy_faiss()
         base = faiss.IndexFlatIP(dim) if self.metric in ("ip", "cosine") else faiss.IndexFlatL2(dim)
         self.index = faiss.IndexIDMap2(base)
 
@@ -28,12 +44,14 @@ class FaissFlat(VectorBackend):
 
     def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Upsert vectors with given IDs."""
+        faiss = _lazy_faiss()
         self.index.remove_ids(faiss.IDSelectorArray(ids.astype("int64")))
         self.index.add_with_ids(x.astype("float32"), ids.astype("int64"))
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
         arr = np.asarray(list(ids), dtype="int64")
+        faiss = _lazy_faiss()
         self.index.remove_ids(faiss.IDSelectorArray(arr))
 
     def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:
@@ -50,11 +68,12 @@ class FaissFlat(VectorBackend):
         self.index = None
 
 
-def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
+def _unwrap_to_ivf(base: object) -> object | None:
     """Return the IVF index inside a composite FAISS index, or None if not found.
 
     Works across FAISS builds with/without extract_index_ivf.
     """
+    faiss = _lazy_faiss()
     # Try the official helper first
     if hasattr(faiss, "extract_index_ivf"):
         try:
@@ -85,16 +104,22 @@ class FaissIVFPQ(VectorBackend):
 
         self.dim = dim
         self.metric = metric.lower()
-        nlist = int(params.get("nlist", 32768))
         self.m = int(params.get("m", 64))
         self.nbits = int(params.get("nbits", 8))
         self.nprobe = int(params.get("nprobe", 32))
+        self.nlist = int(params.get("nlist", 32768))
 
-        # Build a robust composite index via index_factory
+        self._build_index(self.nlist)
+
+    def _build_index(self, nlist: int) -> None:
+        """(Re)create the underlying FAISS index with the requested nlist."""
+
+        faiss = _lazy_faiss()
         desc = f"OPQ{self.m},IVF{nlist},PQ{self.m}x{self.nbits}"
         metric_type = faiss.METRIC_INNER_PRODUCT if self.metric in ("ip", "cosine") else faiss.METRIC_L2
-        base = faiss.index_factory(dim, desc, metric_type)
+        base = faiss.index_factory(self.dim, desc, metric_type)
         self.index = faiss.IndexIDMap2(base)
+        self.nlist = nlist
 
     def train(self, x_train: np.ndarray) -> None:
         """Train the index with given vectors."""
@@ -108,14 +133,7 @@ class FaissIVFPQ(VectorBackend):
             effective_nlist = max(1, min(current_nlist, n))
             if effective_nlist != current_nlist:
                 # Recreate with smaller nlist to avoid training failures
-                self.init(
-                    self.dim,
-                    self.metric,
-                    nlist=effective_nlist,
-                    m=self.m,
-                    nbits=self.nbits,
-                    nprobe=self.nprobe,
-                )
+                self._build_index(effective_nlist)
                 ivf = _unwrap_to_ivf(self.index.index)
 
         # Train if needed
@@ -131,12 +149,14 @@ class FaissIVFPQ(VectorBackend):
 
     def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Upsert vectors with given IDs."""
+        faiss = _lazy_faiss()
         self.index.remove_ids(faiss.IDSelectorArray(ids.astype("int64")))
         self.index.add_with_ids(x.astype("float32"), ids.astype("int64"))
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
         arr = np.asarray(list(ids), dtype="int64")
+        faiss = _lazy_faiss()
         self.index.remove_ids(faiss.IDSelectorArray(arr))
 
     def search(self, q: np.ndarray, topk: int, **kwargs) -> tuple[np.ndarray, np.ndarray]:

@@ -10,12 +10,15 @@ from loguru import logger
 from PIL import Image
 
 
-def load_composite(hf_id: str, splits: Sequence[str]) -> Dataset:
+def load_composite(hf_id: str, splits: Sequence[str] | str) -> Dataset:
     """Load a composite HuggingFace dataset with ID `hf_id` from multiple splits."""
     # TODO(Varun): Use the HuggingFace API to download the data more efficiently.
-    splits = [p.strip() for p in splits if isinstance(p, str)]
+    if isinstance(splits, str):
+        split_values = [splits.strip()]
+    else:
+        split_values = [p.strip() for p in splits if isinstance(p, str)]
     out = []
-    for split in splits:
+    for split in split_values:
         try:
             out.append(load_dataset(hf_id, split=split))
         except Exception:  # noqa: PERF203

@@ -1,0 +1,33 @@
+dataset:
+  hf_id: beans
+  size_splits:
+    small: "train[:200]"
+    large: "train"
+    xlarge: ["train", "validation", "test"]
+    xxlarge: ["train", "validation", "test"]
+  out_dir: "data/raw"
+  export_images: true
+
+embedding:
+  model_id: "openai/clip-vit-base-patch32"
+  batch: 16
+  out_dir: "data/emb"
+  out_hf_dir: "data/emb_hf"
+
+backends:
+  faiss.flat:
+    metric: ip
+  faiss.ivfpq:
+    metric: ip
+    nlist: 32768
+    m: 64
+    nbits: 8
+    nprobe: 32
+
+search:
+  topk: 10
+  queries_file: "benchmark/queries.txt"
+
+update:
+  add_count: 50
+  delete_count: 30

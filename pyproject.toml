@@ -25,6 +25,7 @@ dependencies = [
     "transformers>=4.35,<4.42",
     "torch>=2.0,<2.3",
     "torchvision>=0.15,<0.19",
+    "faiss-cpu>=1.7.4",
     "pyyaml>=6.0",
     "codetiming>=1.4",
     "requests>=2.31",

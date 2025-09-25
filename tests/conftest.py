@@ -1,7 +1,5 @@
-# tests/conftest.py
 """Pytest configuration for shared test setup."""
 
-import importlib
 import os
 
 # Keep thread counts low and avoid at-fork init issues that can trip FAISS/Torch on macOS

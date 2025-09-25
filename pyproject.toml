@@ -92,7 +92,6 @@ ignore = [
     "D202", # No blank lines allowed after function docstring
     "D203", # Incorrect blank line before class
     "D213", # Multi line summary second line
-    "E501", # Line too long
     "FIX002", # Line contains TODO, consider resolving the issue
     "I001", # Import block is un-sorted or un-formatted
     "N802", # Function name `xxx` should be lowercase
@@ -104,9 +103,6 @@ ignore = [
     "TD003", # Missing issue link for this TODO
     "TRY002", # Create your own exception
     "TRY300", # Consider moving this statement to an `else` block
-    "UP032", # Use f-string instead of `format` call
-    "ARG002", # need this for some derived classes not needing some args
-    "PERF203", #try catch in loop for data reading
 ]
 
 [tool.ruff.lint.mccabe]

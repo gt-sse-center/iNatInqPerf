@@ -18,7 +18,7 @@ def load_composite(hf_id: str, splits: Sequence[str]) -> Dataset:
     for split in splits:
         try:
             out.append(load_dataset(hf_id, split=split))
-        except Exception:
+        except Exception:  # noqa: PERF203
             logger.warning(f"[DATAIO] Warning: failed to load dataset split '{split}' from '{hf_id}'")
     if not out:
         return load_dataset(hf_id, split="train")

@@ -1,10 +1,7 @@
 # tests/test_vector_backend.py
-import importlib
-
 import numpy as np
 import pytest
 
-from inatinqperf.adaptors import base
 from inatinqperf.adaptors.base import VectorBackend
 
 
@@ -39,8 +36,8 @@ class DummyBackend(VectorBackend):
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
         self._metric = metric.lower()
-        self._X = np.zeros((0, dim), dtype="float32")
-        self._ids = np.zeros((0,), dtype="int64")
+        self._X = np.zeros((0, dim), dtype=np.float32)
+        self._ids = np.zeros((0,), dtype=np.int64)
         self._dropped = False
 
     def train(self, X_train: np.ndarray):
@@ -55,8 +52,8 @@ class DummyBackend(VectorBackend):
         self._ids = self._ids[mask_keep]
         self._X = self._X[mask_keep]
         # Append new
-        self._ids = np.concatenate([self._ids, ids.astype("int64")])
-        self._X = np.vstack([self._X, X.astype("float32")])
+        self._ids = np.concatenate([self._ids, ids.astype(np.int64)])
+        self._X = np.vstack([self._X, X.astype(np.float32)])
 
     def _sim(self, Q: np.ndarray, X: np.ndarray) -> np.ndarray:
         if self._metric in ("ip", "inner_product", "dot", "cosine"):
@@ -74,7 +71,7 @@ class DummyBackend(VectorBackend):
     def search(self, Q: np.ndarray, topk: int, **kwargs):
         assert self._X is not None and self._ids is not None
         assert Q.shape[1] == self._X.shape[1]
-        sims = self._sim(Q.astype("float32"), self._X)
+        sims = self._sim(Q.astype(np.float32), self._X)
         # argsort descending (higher score = better)
         idx = np.argpartition(-sims, kth=min(topk - 1, sims.shape[1] - 1), axis=1)[:, :topk]
         # sort each row fully
@@ -82,8 +79,8 @@ class DummyBackend(VectorBackend):
         top_scores = sims[row_indices, idx]
         order = np.argsort(-top_scores, axis=1)
         idx_sorted = idx[row_indices, order]
-        D = sims[row_indices, idx_sorted].astype("float32")
-        I = self._ids[idx_sorted].astype("int64")
+        D = sims[row_indices, idx_sorted].astype(np.float32)
+        I = self._ids[idx_sorted].astype(np.int64)
         return D, I
 
     def stats(self):
@@ -100,14 +97,14 @@ class DummyBackend(VectorBackend):
         self._dropped = True
 
     def delete(self, ids):
-        ids = np.asarray(list(ids), dtype="int64")
+        ids = np.asarray(list(ids), dtype=np.int64)
         keep = np.isin(self._ids, ids, invert=True)
         self._ids = self._ids[keep]
         self._X = self._X[keep]
 
 
-@pytest.fixture()
-def tiny_dataset():
+@pytest.fixture(name="tiny_dataset")
+def tiny_dataset_fixture():
     # 4 points in 2D, easy to reason about
     X = np.array(
         [
@@ -116,9 +113,9 @@ def tiny_dataset():
             [1.0, 1.0],  # id 12
             [-1.0, 0.0],  # id 13
         ],
-        dtype="float32",
+        dtype=np.float32,
     )
-    ids = np.array([10, 11, 12, 13], dtype="int64")
+    ids = np.array([10, 11, 12, 13], dtype=np.int64)
     return ids, X
 
 
@@ -135,7 +132,7 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
     be.upsert(ids, X)
 
     # search with two queries
-    Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype="float32")
+    Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
     topk = 3
     D, I = be.search(Q, topk=topk)
 
@@ -178,7 +175,7 @@ def test_upsert_replaces_existing(tiny_dataset):
     assert be.stats()["ntotal"] == len(ids)
 
     # Query should reflect updated vectors
-    Q = np.array([[2.0, 1.0]], dtype="float32")
+    Q = np.array([[2.0, 1.0]], dtype=np.float32)
     D, I = be.search(Q, topk=1)
     assert I.shape == (1, 1)
     # With IP and shifted vectors, id 12 ([2,2]) should be the best match

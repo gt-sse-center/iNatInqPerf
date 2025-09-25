@@ -1,5 +1,6 @@
 """Utilities for data I/O operations."""
 
+from collections.abc import Sequence
 import csv
 from pathlib import Path
 
@@ -9,15 +10,16 @@ from loguru import logger
 from PIL import Image
 
 
-def load_composite(hf_id: str, expr: str) -> Dataset:
-    """Load a composite HuggingFace dataset from multiple splits."""
-    parts = [p.strip() for p in expr.split("+") if p.strip()]
+def load_composite(hf_id: str, splits: Sequence[str]) -> Dataset:
+    """Load a composite HuggingFace dataset with ID `hf_id` from multiple splits."""
+    # TODO(Varun): Use the HuggingFace API to download the data more efficiently.
+    splits = [p.strip() for p in splits if isinstance(p, str)]
     out = []
-    for p in parts:
+    for split in splits:
         try:
-            out.append(load_dataset(hf_id, split=p))
+            out.append(load_dataset(hf_id, split=split))
         except Exception:
-            logger.warning(f"[DATAIO] Warning: failed to load dataset split '{p}' from '{hf_id}'")
+            logger.warning(f"[DATAIO] Warning: failed to load dataset split '{split}' from '{hf_id}'")
     if not out:
         return load_dataset(hf_id, split="train")
     if len(out) == 1:

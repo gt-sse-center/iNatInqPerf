@@ -1,13 +1,10 @@
 # tests/test_embed.py
-import importlib
-
 import numpy as np
 import pytest
 import torch
 from PIL import Image
 
-embed_module = importlib.import_module("inatinqperf.utils.embed")
-embed = importlib.reload(embed_module)
+from inatinqperf.utils import embed
 
 
 # -----------------------

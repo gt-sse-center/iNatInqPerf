@@ -23,19 +23,6 @@ def pytest_configure(config):
         "inatinqperf.utils.dataio",
         "inatinqperf.utils.profiler",
         "inatinqperf.adaptors.base",
-        "inatinqperf.adaptors.faiss_backend",
     ):
         module = importlib.import_module(name)
         importlib.reload(module)
-
-
-def pytest_sessionstart(session):
-    """Clamp FAISS OMP threads early in the session."""
-    try:
-        import faiss  # type: ignore
-
-        if hasattr(faiss, "omp_set_num_threads"):
-            faiss.omp_set_num_threads(1)
-    except Exception:
-        # It's okay if FAISS isn't importable here.
-        pass

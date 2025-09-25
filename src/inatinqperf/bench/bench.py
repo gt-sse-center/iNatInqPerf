@@ -16,7 +16,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import faiss
 import numpy as np
 import yaml
 from datasets import load_from_disk
@@ -47,14 +46,11 @@ def ensure_dir(p: Path) -> Path:
     return p
 
 
-def exact_baseline(x: np.ndarray, metric: str) -> faiss.Index:
+def exact_baseline(x: np.ndarray, metric: str) -> object:
     """Exact baseline index using FAISS IndexFlat*."""
-    d = x.shape[1]
-    base = faiss.IndexFlatIP(d) if metric in ("ip", "cosine") else faiss.IndexFlatL2(d)
-    index = faiss.IndexIDMap2(base)
-    ids = np.arange(x.shape[0], dtype="int64")
-    index.add_with_ids(x.astype("float32"), ids)
-    return index
+    # TODO(Ketan): left empty for scaffolding only PR
+    logger.info(f"exact baseline metric: {metric}")
+    return x.shape[1]
 
 
 def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:

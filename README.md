@@ -54,16 +54,16 @@ Fetch a dataset from Hugging Face, slice by size, and optionally export JPEGs wi
 
 ```bash
 # Small slice (200 samples, exports JPEGs)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size small --out_dir data/raw --export-images
+python src/inatinqperf/benchmark/benchmark.py download --size small --out_dir data/raw --export-images
 
 # Large (full train split only)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size large --out_dir data/raw
+python src/inatinqperf/benchmark/benchmark.py download --size large --out_dir data/raw
 
 # XL (train+val+test)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size xlarge --out_dir data/raw
+python src/inatinqperf/benchmark/benchmark.py download --size xlarge --out_dir data/raw
 
 # XXL (all data)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size xxlarge --out_dir data/raw
+python src/inatinqperf/benchmark/benchmark.py download --size xxlarge --out_dir data/raw
 ```
 
 ### Options
@@ -93,10 +93,10 @@ Generate CLIP embeddings and save them into a Hugging Face dataset.
 
 ```bash
 # Default model + batch size
-uv run python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir data/emb
+python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir data/emb
 
 # Override CLIP model & batch size
-uv run python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir data/emb --model_id openai/clip-vit-large-patch14 --batch 32
+python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir data/emb --model_id openai/clip-vit-large-patch14 --batch 32
 ```
 
 **Outputs:**
@@ -111,10 +111,10 @@ Construct an index on a chosen backend.
 
 ```bash
 # FAISS Flat (exact baseline)
-uv run python src/inatinqperf/benchmark/benchmark.py build --backend faiss.flat --hf_dir data/emb_hf
+python src/inatinqperf/benchmark/benchmark.py build --backend faiss.flat --hf_dir data/emb_hf
 
 # FAISS IVF+PQ (ANN)
-uv run python src/inatinqperf/benchmark/benchmark.py build --backend faiss.ivfpq --hf_dir data/emb_hf
+python src/inatinqperf/benchmark/benchmark.py build --backend faiss.ivfpq --hf_dir data/emb_hf
 ```
 
 **Supported backends:**
@@ -128,7 +128,7 @@ uv run python src/inatinqperf/benchmark/benchmark.py build --backend faiss.ivfpq
 Profile query latency and compute Recall@K vs FAISS Flat baseline.
 
 ```bash
-uv run python src/inatinqperf/benchmark/benchmark.py search --backend faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries bench/queries.txt
+python src/inatinqperf/benchmark/benchmark.py search --backend faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries bench/queries.txt
 ```
 
 **Outputs:**
@@ -143,7 +143,7 @@ uv run python src/inatinqperf/benchmark/benchmark.py search --backend faiss.ivfp
 Simulate real-time usage: insert (upsert) and delete vectors.
 
 ```bash
-uv run python src/inatinqperf/benchmark/benchmark.py update --backend faiss.ivfpq --hf_dir data/emb_hf
+python src/inatinqperf/benchmark/benchmark.py update --backend faiss.ivfpq --hf_dir data/emb_hf
 ```
 
 Configurable counts via `configs/benchmark.yaml`:

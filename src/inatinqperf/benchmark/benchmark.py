@@ -9,18 +9,18 @@ Subcommands:
   run-all   -> download->embed->build(Faiss Flat + chosen backend)->search->update
 """
 
-import argparse  # TODO(Varun): Consider using `typer` instead
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Annotated
 
-import faiss
 import numpy as np
 import yaml
 from datasets import load_from_disk
 from loguru import logger
+import typer
 
 from inatinqperf.adaptors import BACKENDS
 from inatinqperf.utils.dataio import export_images, load_composite
@@ -34,11 +34,34 @@ SAMPLE_SIZE = 500_000  # max samples for training if needed
 BENCHMARK_CFG = ROOT / "configs" / "benchmark.yaml"
 
 
+class DatasetSize(str, Enum):
+    """CLI-safe enumeration of dataset splits."""
+
+    small = "small"
+    large = "large"
+    xlarge = "xlarge"
+    xxlarge = "xxlarge"
+
+
+app = typer.Typer(help="VectorDB-agnostic benchmark orchestrator.")
+
+
 def load_cfg(path: Path) -> Mapping[str, object]:
     """Load YAML config file."""
     logger.info(f"Loading config: {path}")
     with path.open() as f:
         return yaml.safe_load(f)
+
+
+def _require_faiss() -> object:
+    """Import faiss lazily so lightweight commands avoid the dependency."""
+
+    try:
+        import faiss  # noqa: PLC0415
+    except ModuleNotFoundError as exc:  # pragma: no cover - surface to CLI
+        msg = "Faiss is required for this command. Install `faiss-gpu` or `faiss-cpu`."
+        raise typer.BadParameter(msg) from exc
+    return faiss
 
 
 def ensure_dir(p: Path) -> Path:
@@ -47,8 +70,43 @@ def ensure_dir(p: Path) -> Path:
     return p
 
 
-def exact_baseline(x: np.ndarray, metric: str) -> faiss.Index:
+def _resolve_hf_dir(hf_dir: Path | None, cfg: Mapping[str, object]) -> Path:
+    """Resolve a HuggingFace dataset directory and validate its contents."""
+
+    candidate = Path(hf_dir) if hf_dir else Path(cfg["embedding"]["out_hf_dir"])
+    dataset_info_json = candidate / "dataset_info.json"
+    dataset_dict_json = candidate / "dataset_dict.json"
+    if not candidate.exists() or not (dataset_info_json.exists() or dataset_dict_json.exists()):
+        msg = (
+            f"Embedded dataset not found at '{candidate}'. Run the embed command first or "
+            "point --hf-dir at a directory produced by HuggingFace Dataset.save_to_disk()."
+        )
+        raise typer.BadParameter(msg)
+    return candidate
+
+
+def _resolve_queries_path(queries: Path | None, cfg: Mapping[str, object]) -> Path:
+    """Resolve a queries text file, checking repo-relative fallbacks."""
+
+    candidate = Path(queries) if queries else Path(cfg["search"]["queries_file"])
+    if candidate.is_absolute() and candidate.exists():
+        return candidate
+
+    for base in (Path.cwd(), ROOT):
+        probe = base / candidate
+        if probe.exists():
+            return probe
+
+    msg = (
+        f"Queries file '{candidate}' not found. Provide a valid path via --queries or update "
+        "search.queries_file in the config."
+    )
+    raise typer.BadParameter(msg)
+
+
+def exact_baseline(x: np.ndarray, metric: str) -> object:
     """Exact baseline index using FAISS IndexFlat*."""
+    faiss = _require_faiss()
     d = x.shape[1]
     base = faiss.IndexFlatIP(d) if metric in ("ip", "cosine") else faiss.IndexFlatL2(d)
     index = faiss.IndexIDMap2(base)
@@ -65,46 +123,53 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     return hits / float(approx_i.shape[0] * k)
 
 
-def cmd_download(size: str, out_dir: Path, perform_export_images: bool, cfg: Mapping[str, Any]) -> None:  # noqa: FBT001
+def cmd_download(
+    size: str,
+    out_dir: Path | None,
+    *,
+    export_images_flag: bool | None,
+    cfg: Mapping[str, object],
+) -> None:
     """Download HF dataset and optionally export images."""
-    # TODO(Varun): Make all the cmd_* functions take a class encapsulating the arguments.
     hf_id = cfg["dataset"]["hf_id"]
-    out_dir = out_dir or cfg["dataset"]["out_dir"]
-    export = (
-        perform_export_images
-        if perform_export_images is not None
-        else cfg["dataset"].get("export_images", True)
-    )
+    out_dir = out_dir if out_dir else Path(cfg["dataset"]["out_dir"])
+    export = cfg["dataset"].get("export_images", True) if export_images_flag is None else export_images_flag
     split_map = cfg["dataset"]["size_splits"]
     split = split_map.get(size, split_map["small"])
     ensure_dir(out_dir)
     with Profiler(f"download-{hf_id}-{size}"):
         ds = load_composite(hf_id, split)
-        ds.save_to_disk(out_dir)
+        ds.save_to_disk(str(out_dir))
         if export:
-            export_dir = Path(out_dir) / "images"
+            export_dir = out_dir / "images"
             manifest = export_images(ds, export_dir)
             logger.info(f"Exported images to: {export_dir}\nManifest: {manifest}")
     logger.info(f"Saved HuggingFace dataset to: {out_dir}")
 
 
-def cmd_embed(model_id: int, batch_size: int, raw_dir: Path, emb_dir: Path, cfg: Mapping[str, Any]) -> None:
+def cmd_embed(
+    model_id: str | None,
+    batch_size: int | None,
+    raw_dir: Path | None,
+    emb_dir: Path | None,
+    cfg: Mapping[str, object],
+) -> None:
     """Compute CLIP embeddings and save HF dataset with 'embedding'."""
     model_id = model_id or cfg["embedding"]["model_id"]
     batch_size = batch_size or int(cfg["embedding"]["batch"])
-    raw_dir = raw_dir or cfg["dataset"]["out_dir"]
-    emb_dir = emb_dir or cfg["embedding"]["out_dir"]
-    out_hf_dir = cfg["embedding"]["out_hf_dir"]
+    raw_dir = raw_dir if raw_dir else Path(cfg["dataset"]["out_dir"])
+    emb_dir = emb_dir if emb_dir else Path(cfg["embedding"]["out_dir"])
+    out_hf_dir = Path(cfg["embedding"]["out_hf_dir"])
     ensure_dir(emb_dir)
     ensure_dir(out_hf_dir)
     with Profiler("embed-images"):
         dataset_with_embeddings = embed_images(raw_dir, model_id, batch_size)
-        x = dataset_with_embeddings.dataset
+        embeddings = dataset_with_embeddings.embeddings
         ids = dataset_with_embeddings.ids
         labels = dataset_with_embeddings.labels
-        ds2 = to_hf_dataset(x, ids, labels)
-        ds2.save_to_disk(out_hf_dir)
-        logger.info(f"Embeddings: {x.shape} -> {out_hf_dir}")
+        ds2 = to_hf_dataset(embeddings, ids, labels)
+        ds2.save_to_disk(str(out_hf_dir))
+        logger.info(f"Embeddings: {embeddings.shape} -> {out_hf_dir}")
 
 
 def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, object]) -> dict:
@@ -112,6 +177,7 @@ def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, ob
 
     Prevents errors like: TypeError: ... init() got multiple values for keyword 'metric'.
     """
+    _require_faiss()  # ensure faiss is present before touching backend factory
     backend = BACKENDS[backend_name]
 
     # Avoid passing duplicate values for explicit kwargs
@@ -121,11 +187,14 @@ def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, ob
     return backend(dim=dim, metric=metric, **safe_params)
 
 
-def cmd_build(backend: str, hf_dir: Path, cfg: Mapping[str, Any]) -> None:
+def cmd_build(backend: str, hf_dir: Path | None, cfg: Mapping[str, object]) -> None:
     """Build index for a backend."""
+    if backend not in BACKENDS:
+        msg = f"Unknown backend '{backend}'. Available: {', '.join(sorted(BACKENDS))}"
+        raise typer.BadParameter(msg)
     params = cfg["backends"][backend]
-    hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
-    ds = load_from_disk(hf_dir)
+    resolved_hf = _resolve_hf_dir(hf_dir, cfg)
+    ds = load_from_disk(str(resolved_hf))
     x = np.stack(ds["embedding"]).astype("float32")
     metric = params.get("metric", "ip").lower()
     be = _init_backend(backend, x.shape[1], metric, params)
@@ -141,22 +210,36 @@ def cmd_build(backend: str, hf_dir: Path, cfg: Mapping[str, Any]) -> None:
     logger.info("Stats:", be.stats())
 
 
-def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cfg: Mapping[str, Any]) -> None:
+def cmd_search(
+    backend: str,
+    hf_dir: Path | None,
+    topk: int | None,
+    queries: Path | None,
+    cfg: Mapping[str, object],
+) -> None:
     """Profile search and compute recall@K vs exact baseline."""
+    if backend not in BACKENDS:
+        msg = f"Unknown backend '{backend}'. Available: {', '.join(sorted(BACKENDS))}"
+        raise typer.BadParameter(msg)
     params = cfg["backends"][backend]
-    hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
+    resolved_hf = _resolve_hf_dir(hf_dir, cfg)
     topk = topk or int(cfg["search"]["topk"])
-    queries_file = queries or cfg["search"]["queries_file"]
+    queries_file = _resolve_queries_path(queries, cfg)
     model_id = cfg["embedding"]["model_id"]
 
-    ds = load_from_disk(hf_dir)
+    ds = load_from_disk(str(resolved_hf))
     x = np.stack(ds["embedding"]).astype("float32")
     ids = np.array(ds["id"], dtype="int64")
     metric = params.get("metric", "ip").lower()
     # exact baseline
     base = exact_baseline(x, metric="ip" if metric in ("ip", "cosine") else "l2")
     # backend
-    be = _init_backend(backend, x.shape[1], "ip" if metric in ("ip", "cosine") else "l2", params)
+    be = _init_backend(
+        backend,
+        x.shape[1],
+        "ip" if metric in ("ip", "cosine") else "l2",
+        params,
+    )
     be.train(
         x
         if x.shape[0] < SAMPLE_SIZE
@@ -164,7 +247,7 @@ def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cf
     )
     be.upsert(ids, x)
 
-    queries = [q.strip() for q in Path(queries_file).read_text(encoding="utf-8").splitlines() if q.strip()]
+    queries = [q.strip() for q in queries_file.read_text(encoding="utf-8").splitlines() if q.strip()]
     q = embed_text(queries, model_id)
 
     # search + profile
@@ -192,14 +275,23 @@ def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cf
     logger.info(json.dumps(stats, indent=2))
 
 
-def cmd_update(backend: str, hf_dir: Path, add_n: int, delete: int, cfg: Mapping[str, Any]) -> None:
+def cmd_update(
+    backend: str,
+    hf_dir: Path | None,
+    add_n: int | None,
+    delete: int | None,
+    cfg: Mapping[str, object],
+) -> None:
     """Upsert + delete small batch and re-search."""
+    if backend not in BACKENDS:
+        msg = f"Unknown backend '{backend}'. Available: {', '.join(sorted(BACKENDS))}"
+        raise typer.BadParameter(msg)
     params = cfg["backends"][backend]
-    hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
+    resolved_hf = _resolve_hf_dir(hf_dir, cfg)
     add_n = add_n or int(cfg["update"]["add_count"])
     del_n = delete or int(cfg["update"]["delete_count"])
 
-    ds = load_from_disk(hf_dir)
+    ds = load_from_disk(str(resolved_hf))
     x = np.stack(ds["embedding"]).astype("float32")
     ids = np.array(ds["id"], dtype="int64")
     be = _init_backend(backend, x.shape[1], "ip", params)
@@ -223,96 +315,140 @@ def cmd_update(backend: str, hf_dir: Path, add_n: int, delete: int, cfg: Mapping
     logger.info("Update complete.", be.stats())
 
 
-def cmd_run_all(size: str, backend: str, cfg: Mapping[str, Any]) -> None:
+def cmd_run_all(size: str, backend: str, cfg: Mapping[str, object]) -> None:
     """Run end-to-end benchmark with all steps."""
 
-    # minimal run for small dataset
-    class A:
-        pass
+    backend = backend or "faiss.ivfpq"
+    if backend not in BACKENDS:
+        msg = f"Unknown backend '{backend}'. Available: {', '.join(sorted(BACKENDS))}"
+        raise typer.BadParameter(msg)
 
-    a = A()
-    a.size = size or "small"
-    a.out_dir = cfg["dataset"]["out_dir"]
-    a.export_images = False
-    cmd_download(a, cfg)
+    cmd_download(
+        size,
+        Path(cfg["dataset"]["out_dir"]),
+        export_images_flag=False,
+        cfg=cfg,
+    )
 
-    b = A()
-    b.model_id = cfg["embedding"]["model_id"]
-    b.batch = int(cfg["embedding"]["batch"])
-    b.raw_dir = cfg["dataset"]["out_dir"]
-    b.emb_dir = cfg["embedding"]["out_dir"]
-    cmd_embed(b, cfg)
+    cmd_embed(
+        cfg["embedding"]["model_id"],
+        int(cfg["embedding"]["batch"]),
+        Path(cfg["dataset"]["out_dir"]),
+        Path(cfg["embedding"]["out_dir"]),
+        cfg,
+    )
 
     # Build FAISS Flat baseline then chosen backend
-    for be in ["faiss.flat", backend or "faiss.ivfpq"]:
-        c = A()
-        c.backend = be
-        c.hf_dir = cfg["embedding"]["out_hf_dir"]
-        cmd_build(c, cfg)
+    for be_name in ["faiss.flat", backend]:
+        cmd_build(be_name, Path(cfg["embedding"]["out_hf_dir"]), cfg)
 
-    d = A()
-    d.backend = backend or "faiss.ivfpq"
-    d.hf_dir = cfg["embedding"]["out_hf_dir"]
-    d.topk = 10
-    d.queries = cfg["search"]["queries_file"]
-    cmd_search(d, cfg)
+    cmd_search(
+        backend,
+        Path(cfg["embedding"]["out_hf_dir"]),
+        10,
+        Path(cfg["search"]["queries_file"]),
+        cfg,
+    )
 
-    e = A()
-    e.backend = backend or "faiss.ivfpq"
-    e.hf_dir = cfg["embedding"]["out_hf_dir"]
-    e.add = None
-    e.delete = None
-    cmd_update(e, cfg)
+    cmd_update(
+        backend,
+        Path(cfg["embedding"]["out_hf_dir"]),
+        None,
+        None,
+        cfg,
+    )
+
+
+@app.command()
+def download(
+    size: Annotated[DatasetSize, typer.Option("--size", help="Dataset split to fetch.")] = DatasetSize.small,
+    out_dir: Annotated[Path | None, typer.Option("--out-dir", help="Directory to store the dataset.")] = None,
+    export_images: Annotated[
+        bool | None,
+        typer.Option(
+            "--export-images/--no-export-images",
+            help="Explicitly enable or disable image export.",
+        ),
+    ] = None,
+) -> None:
+    """Download dataset artifacts."""
+
+    cfg = load_cfg(BENCHMARK_CFG)
+    cmd_download(size.value, out_dir, export_images_flag=export_images, cfg=cfg)
+
+
+@app.command()
+def embed(
+    raw_dir: Annotated[
+        Path | None, typer.Option("--raw-dir", help="Input directory from download step.")
+    ] = None,
+    emb_dir: Annotated[Path | None, typer.Option("--emb-dir", help="Directory to store embeddings.")] = None,
+    model_id: Annotated[str | None, typer.Option("--model-id", help="CLIP model identifier.")] = None,
+    batch: Annotated[int | None, typer.Option("--batch", help="Batch size for embedding inference.")] = None,
+) -> None:
+    """Compute CLIP embeddings for the dataset."""
+
+    cfg = load_cfg(BENCHMARK_CFG)
+    cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
+
+
+@app.command()
+def build(
+    backend: Annotated[str, typer.Option("--backend", help="Backend name to build.")] = ...,
+    hf_dir: Annotated[Path | None, typer.Option("--hf-dir", help="Directory with embedded dataset.")] = None,
+) -> None:
+    """Build an index for a backend."""
+
+    cfg = load_cfg(BENCHMARK_CFG)
+    cmd_build(backend, hf_dir, cfg)
+
+
+@app.command()
+def search(
+    backend: Annotated[str, typer.Option("--backend", help="Backend name to search.")] = ...,
+    hf_dir: Annotated[Path | None, typer.Option("--hf-dir", help="Directory with embedded dataset.")] = None,
+    topk: Annotated[
+        int | None, typer.Option("--topk", help="Number of nearest neighbors to retrieve.")
+    ] = None,
+    queries: Annotated[
+        Path | None,
+        typer.Option("--queries", help="Text file with newline-delimited queries."),
+    ] = None,
+) -> None:
+    """Profile search latency and recall for a backend."""
+
+    cfg = load_cfg(BENCHMARK_CFG)
+    cmd_search(backend, hf_dir, topk, queries, cfg)
+
+
+@app.command()
+def update(
+    backend: Annotated[str, typer.Option("--backend", help="Backend name to exercise update path.")] = ...,
+    hf_dir: Annotated[Path | None, typer.Option("--hf-dir", help="Directory with embedded dataset.")] = None,
+    add: Annotated[int | None, typer.Option("--add", help="How many vectors to upsert.")] = None,
+    delete: Annotated[int | None, typer.Option("--delete", help="How many vectors to delete.")] = None,
+) -> None:
+    """Exercise the upsert/delete workflow for a backend."""
+
+    cfg = load_cfg(BENCHMARK_CFG)
+    cmd_update(backend, hf_dir, add, delete, cfg)
+
+
+@app.command("run-all")
+def run_all(
+    size: Annotated[DatasetSize, typer.Option("--size", help="Dataset split to use.")] = DatasetSize.small,
+    backend: Annotated[str, typer.Option("--backend", help="Backend name for the workflow.")] = "faiss.ivfpq",
+) -> None:
+    """Run the full benchmark workflow."""
+
+    cfg = load_cfg(BENCHMARK_CFG)
+    cmd_run_all(size.value, backend, cfg)
 
 
 def main() -> None:
-    """Entry point."""
-    p = argparse.ArgumentParser(description="VectorDB-agnostic benchmark")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    """Typer entry point."""
 
-    sp = sub.add_parser("download", help="Download HF dataset and optionally export images")
-    sp.add_argument("--size", choices=["small", "large", "xlarge", "xxlarge"], default="small")
-    sp.add_argument("--out_dir", default=None)
-    sp.add_argument("--export-images", action="store_true")
-    sp.add_argument("--no-export-images", dest="export_images", action="store_false")
-    sp.set_defaults(func=cmd_download)
-
-    sp = sub.add_parser("embed", help="Compute CLIP embeddings and save HF dataset with 'embedding'")
-    sp.add_argument("--raw_dir", default=None, type=Path)
-    sp.add_argument("--emb_dir", default=None, type=Path)
-    sp.add_argument("--model_id", default=None)
-    sp.add_argument("--batch", type=int, default=None)
-    sp.set_defaults(func=cmd_embed)
-
-    sp = sub.add_parser("build", help="Build index for a backend")
-    sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
-    sp.add_argument("--hf_dir", default=None)
-    sp.set_defaults(func=cmd_build)
-
-    sp = sub.add_parser("search", help="Profile search on a backend and compute recall@K vs exact baseline")
-    sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
-    sp.add_argument("--hf_dir", default=None)
-    sp.add_argument("--topk", type=int, default=None)
-    sp.add_argument("--queries", default=None)
-    sp.set_defaults(func=cmd_search)
-
-    sp = sub.add_parser("update", help="Upsert + delete workflow on a backend")
-    sp.add_argument("--backend", required=True, choices=list(BACKENDS.keys()))
-    sp.add_argument("--hf_dir", type=Path, default=None)
-    sp.add_argument("--add", type=int, default=None)
-    sp.add_argument("--delete", type=int, default=None)
-    sp.set_defaults(func=cmd_update)
-
-    sp = sub.add_parser(
-        "run-all", help="Run small end-to-end: download -> embed -> build -> search -> update"
-    )
-    sp.add_argument("--size", default="small")
-    sp.add_argument("--backend", default="faiss.ivfpq")
-    sp.set_defaults(func=cmd_run_all)
-
-    args = p.parse_args()
-    cfg = load_cfg(BENCHMARK_CFG)
-    args.func(args, cfg)
+    app()
 
 
 if __name__ == "__main__":

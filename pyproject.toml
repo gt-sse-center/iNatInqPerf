@@ -89,6 +89,7 @@ ignore = [
     "COM812", # Trailing comma missing
     "D105", # Missing docstring in magic method
     "D107", # Missing docstring in `__init__` method
+    "D202", # No blank lines allowed after function docstring
     "D203", # Incorrect blank line before class
     "D213", # Multi line summary second line
     "FIX002", # Line contains TODO, consider resolving the issue

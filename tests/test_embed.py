@@ -107,7 +107,9 @@ def test_to_hf_dataset_structure():
     X = np.ones((3, 4))
     ids = [1, 2, 3]
     labels = ["a", "b", "c"]
-    ds = embed.to_hf_dataset(X, ids, labels)
+    dse = embed.ImageDatasetWithEmbeddings(X, ids, labels)
+
+    ds = embed.to_hf_dataset(dse)
     assert set(ds.column_names) == {"id", "label", "embedding"}
     assert isinstance(ds[0]["embedding"], list)
     assert ds[0]["id"] == 1
@@ -128,18 +130,16 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
     )
 
     dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch=2)
-    ds_out = dataset_with_embeddings.dataset
     X = dataset_with_embeddings.embeddings
     ids = dataset_with_embeddings.ids
     labels = dataset_with_embeddings.labels
 
-    assert ds_out is ds
     assert X.shape[0] == 4
     assert all(isinstance(i, int) for i in ids)
     assert labels == [0, 1, 2, 3]
 
     # Convert to HF dataset structure
-    hf_ds = embed.to_hf_dataset(X, ids, labels)
+    hf_ds = embed.to_hf_dataset(dataset_with_embeddings)
     assert set(hf_ds.column_names) == {"id", "label", "embedding"}
     assert len(hf_ds) == 4
     assert isinstance(hf_ds[0]["embedding"], list)

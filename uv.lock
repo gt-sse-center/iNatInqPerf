@@ -714,7 +714,7 @@ dev = [
 requires-dist = [
     { name = "codetiming", specifier = ">=1.4" },
     { name = "datasets", specifier = ">=2.14,<3.0" },
-    { name = "faiss-cpu", specifier = ">=1.7.4" },
+    { name = "faiss-cpu", specifier = ">=1.12.0" },
     { name = "huggingface-hub", specifier = ">=0.23" },
     { name = "numpy", specifier = ">=2.0.0" },
     { name = "pandas", specifier = ">=1.5,<2.3" },

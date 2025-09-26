@@ -1,8 +1,8 @@
 dataset:
   hf_id: beans
   size_splits:
-    small: "train[:200]"
-    large: "train"
+    small: ["train[:200]"]
+    large: ["train"]
     xlarge: ["train", "validation", "test"]
     xxlarge: ["train", "validation", "test"]
   out_dir: "data/raw"

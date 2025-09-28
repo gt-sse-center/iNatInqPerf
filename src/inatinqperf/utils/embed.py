@@ -9,6 +9,7 @@ import torch
 from datasets import Dataset, Features, Value, load_from_disk
 from datasets import Sequence as HFSequence
 from PIL import Image
+from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
 
 _EMBED_MATRIX_NDIM = 2
@@ -24,6 +25,16 @@ def pilify(img: Image.Image | np.ndarray) -> Image.Image:
     raise TypeError(msg)
 
 
+def get_device() -> str:
+    """Return the accelerator device which is available."""
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.mps.is_available():
+        return "mps"
+
+    return "cpu"
+
+
 @dataclass
 class ImageDatasetWithEmbeddings:
     """An image dataset with embeddings, IDs and labels."""
@@ -37,14 +48,14 @@ class ImageDatasetWithEmbeddings:
 def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEmbeddings:
     """Embed images from a dataset on disk using a CLIP model."""
     ds = load_from_disk(raw_dir)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = CLIPModel.from_pretrained(model_id).to(device)
+    device = get_device()
     proc = CLIPProcessor.from_pretrained(model_id)
+    model = CLIPModel.from_pretrained(model_id).to(device)
 
     imgs = [pilify(r["image"]) for r in ds]
 
     all_emb, ids, labels = [], [], []
-    for i in range(0, len(imgs), batch):
+    for i in tqdm(range(0, len(imgs), batch)):
         batch_imgs = imgs[i : i + batch]
         with torch.no_grad():
             inputs = proc(images=batch_imgs, return_tensors="pt", padding=True).to(device)
@@ -72,12 +83,12 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
 
 
 def to_hf_dataset(
-    x: np.ndarray,
+    embeddings: np.ndarray,
     ids: Sequence[int] | np.ndarray,
     labels: Sequence[int | str] | np.ndarray,
 ) -> Dataset:
     """Convert embeddings and metadata to a HuggingFace dataset."""
-    emb_dim = int(x.shape[1]) if x.ndim == _EMBED_MATRIX_NDIM and x.shape[1:] else 0
+    emb_dim = embeddings.shape[1] if embeddings.ndim == _EMBED_MATRIX_NDIM and embeddings.shape[1:] else 0
 
     try:
         label_values = [int(y) for y in labels]
@@ -97,7 +108,7 @@ def to_hf_dataset(
         {
             "id": [int(i) for i in ids],
             "label": label_values,
-            "embedding": [row.tolist() for row in x],
+            "embedding": [d.tolist() for d in embeddings],
         },
         features=feats,
     )

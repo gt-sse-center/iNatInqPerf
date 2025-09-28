@@ -310,11 +310,11 @@ def test_cmd_update_with_dummy_backend(monkeypatch, tmp_path):
 def test_cli_main_dispatch(monkeypatch, tmp_path, verb):
     # Stub subcommand implementations to do nothing
     calls: list[str] = []
-    monkeypatch.setattr(benchmark, "cmd_download", lambda a, c: calls.append("download"))
-    monkeypatch.setattr(benchmark, "cmd_embed", lambda a, c: calls.append("embed"))
-    monkeypatch.setattr(benchmark, "cmd_build", lambda a, c: calls.append("build"))
-    monkeypatch.setattr(benchmark, "cmd_search", lambda a, c: calls.append("search"))
-    monkeypatch.setattr(benchmark, "cmd_update", lambda a, c: calls.append("update"))
+    monkeypatch.setattr(benchmark, "cmd_download", lambda **kwargs: calls.append("download"))
+    monkeypatch.setattr(benchmark, "cmd_embed", lambda **kwargs: calls.append("embed"))
+    monkeypatch.setattr(benchmark, "cmd_build", lambda **kwargs: calls.append("build"))
+    monkeypatch.setattr(benchmark, "cmd_search", lambda **kwargs: calls.append("search"))
+    monkeypatch.setattr(benchmark, "cmd_update", lambda **kwargs: calls.append("update"))
 
     if verb == "download":
         argv = ["prog", verb, "--size", "small"]
@@ -479,13 +479,13 @@ class LazyIds:
 
 def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(benchmark, "cmd_download", lambda a, c: calls.append("download"))
-    monkeypatch.setattr(benchmark, "cmd_embed", lambda a, c: calls.append("embed"))
+    monkeypatch.setattr(benchmark, "cmd_download", lambda **kwargs: calls.append("download"))
+    monkeypatch.setattr(benchmark, "cmd_embed", lambda **kwargs: calls.append("embed"))
     monkeypatch.setattr(
-        benchmark, "cmd_build", lambda a, c: calls.append(f"build:{getattr(a, 'backend', None)}")
+        benchmark, "cmd_build", lambda **kwargs: calls.append(f"build:{kwargs.get('backend', None)}")
     )
-    monkeypatch.setattr(benchmark, "cmd_search", lambda a, c: calls.append("search"))
-    monkeypatch.setattr(benchmark, "cmd_update", lambda a, c: calls.append("update"))
+    monkeypatch.setattr(benchmark, "cmd_search", lambda **kwargs: calls.append("search"))
+    monkeypatch.setattr(benchmark, "cmd_update", lambda **kwargs: calls.append("update"))
 
     cfg = {
         "dataset": {"out_dir": str(tmp_path)},

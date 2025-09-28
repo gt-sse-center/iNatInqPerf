@@ -67,8 +67,7 @@ def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
     # Fallback: walk .index fields until we find .nlist
     node = base
     visited = 0
-    five = 5
-    while node is not None and visited < five:
+    while node is not None and visited < 5:  # noqa: PLR2004
         if hasattr(node, "nlist"):  # IVF layer
             return node
         node = getattr(node, "index", None)
@@ -92,8 +91,8 @@ class FaissIVFPQ(VectorBackend):
 
         # Build a robust composite index via index_factory
         desc = f"OPQ{self.m},IVF{nlist},PQ{self.m}x{self.nbits}"
-        metric_type = faiss.METRIC_INNER_PRODUCT if self.metric in ("ip", "cosine") else faiss.METRIC_L2
-        base = faiss.index_factory(dim, desc, metric_type)
+        self.metric_type = faiss.METRIC_INNER_PRODUCT if self.metric in ("ip", "cosine") else faiss.METRIC_L2
+        base = faiss.index_factory(dim, desc, self.metric_type)
         self.index = faiss.IndexIDMap2(base)
 
     def train(self, x_train: np.ndarray) -> None:
@@ -108,14 +107,9 @@ class FaissIVFPQ(VectorBackend):
             effective_nlist = max(1, min(current_nlist, n))
             if effective_nlist != current_nlist:
                 # Recreate with smaller nlist to avoid training failures
-                self.init(
-                    self.dim,
-                    self.metric,
-                    nlist=effective_nlist,
-                    m=self.m,
-                    nbits=self.nbits,
-                    nprobe=self.nprobe,
-                )
+                desc = f"OPQ{self.m},IVF{effective_nlist},PQ{self.m}x{self.nbits}"
+                base = faiss.index_factory(self.dim, desc, self.metric_type)
+                self.index = faiss.IndexIDMap2(base)
                 ivf = _unwrap_to_ivf(self.index.index)
 
         # Train if needed

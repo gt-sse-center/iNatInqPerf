@@ -11,6 +11,7 @@ Subcommands:
 
 import argparse  # TODO(Varun): Consider using `typer` instead
 import json
+from tqdm import tqdm
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -65,11 +66,17 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     return hits / float(approx_i.shape[0] * k)
 
 
-def cmd_download(size: str, out_dir: Path, perform_export_images: bool, cfg: Mapping[str, Any]) -> None:  # noqa: FBT001
+def cmd_download(
+    size: str,
+    out_dir: Path,
+    perform_export_images: bool,  # noqa: FBT001
+    cfg: Mapping[str, Any],
+    **kwargs,  # noqa: ARG001
+) -> None:
     """Download HF dataset and optionally export images."""
     # TODO(Varun): Make all the cmd_* functions take a class encapsulating the arguments.
     hf_id = cfg["dataset"]["hf_id"]
-    out_dir = out_dir or cfg["dataset"]["out_dir"]
+    out_dir = out_dir or Path(cfg["dataset"]["out_dir"])
     export = (
         perform_export_images
         if perform_export_images is not None
@@ -88,22 +95,31 @@ def cmd_download(size: str, out_dir: Path, perform_export_images: bool, cfg: Map
     logger.info(f"Saved HuggingFace dataset to: {out_dir}")
 
 
-def cmd_embed(model_id: int, batch_size: int, raw_dir: Path, emb_dir: Path, cfg: Mapping[str, Any]) -> None:
+def cmd_embed(
+    model_id: int,
+    batch_size: int,
+    raw_dir: Path,
+    emb_dir: Path,
+    cfg: Mapping[str, Any],
+    **kwargs,  # noqa: ARG001
+) -> None:
     """Compute CLIP embeddings and save HF dataset with 'embedding'."""
     model_id = model_id or cfg["embedding"]["model_id"]
     batch_size = batch_size or int(cfg["embedding"]["batch"])
-    raw_dir = raw_dir or cfg["dataset"]["out_dir"]
-    emb_dir = emb_dir or cfg["embedding"]["out_dir"]
-    out_hf_dir = cfg["embedding"]["out_hf_dir"]
+    raw_dir = raw_dir or Path(cfg["dataset"]["out_dir"])
+    emb_dir = emb_dir or Path(cfg["embedding"]["out_dir"])
+    out_hf_dir = Path(cfg["embedding"]["out_hf_dir"])
     ensure_dir(emb_dir)
     ensure_dir(out_hf_dir)
     with Profiler("embed-images"):
         dataset_with_embeddings = embed_images(raw_dir, model_id, batch_size)
-        x = dataset_with_embeddings.dataset
+        x = dataset_with_embeddings.embeddings
         ids = dataset_with_embeddings.ids
         labels = dataset_with_embeddings.labels
-        ds2 = to_hf_dataset(x, ids, labels)
-        ds2.save_to_disk(out_hf_dir)
+
+        # Convert to HuggingFace dataset format and save to disk
+        to_hf_dataset(x, ids, labels).save_to_disk(out_hf_dir)
+
         logger.info(f"Embeddings: {x.shape} -> {out_hf_dir}")
 
 
@@ -118,10 +134,16 @@ def _init_backend(backend_name: str, dim: int, metric: str, params: dict[str, ob
     safe_params = dict(params) if params else {}
     for k in ("metric", "dim", "name"):
         safe_params.pop(k, None)
+
     return backend(dim=dim, metric=metric, **safe_params)
 
 
-def cmd_build(backend: str, hf_dir: Path, cfg: Mapping[str, Any]) -> None:
+def cmd_build(
+    backend: str,
+    hf_dir: Path,
+    cfg: Mapping[str, Any],
+    **kwargs,  # noqa: ARG001
+) -> None:
     """Build index for a backend."""
     params = cfg["backends"][backend]
     hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
@@ -141,7 +163,14 @@ def cmd_build(backend: str, hf_dir: Path, cfg: Mapping[str, Any]) -> None:
     logger.info("Stats:", be.stats())
 
 
-def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cfg: Mapping[str, Any]) -> None:
+def cmd_search(
+    backend: str,
+    hf_dir: Path,
+    topk: int,
+    queries: Sequence[str],
+    cfg: Mapping[str, Any],
+    **kwargs,  # noqa: ARG001
+) -> None:
     """Profile search and compute recall@K vs exact baseline."""
     params = cfg["backends"][backend]
     hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
@@ -171,7 +200,7 @@ def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cf
     with Profiler(f"search-{backend}") as p:
         lat = []
         _, i0 = base.search(q, topk)  # exact
-        for i in range(q.shape[0]):
+        for i in tqdm(range(q.shape[0])):
             t0 = time.perf_counter()
             _, _ = be.search(q[i : i + 1], topk, **params)
             lat.append((time.perf_counter() - t0) * 1000.0)
@@ -192,12 +221,19 @@ def cmd_search(backend: str, hf_dir: Path, topk: int, queries: Sequence[str], cf
     logger.info(json.dumps(stats, indent=2))
 
 
-def cmd_update(backend: str, hf_dir: Path, add_n: int, delete: int, cfg: Mapping[str, Any]) -> None:
+def cmd_update(
+    backend: str,
+    hf_dir: Path,
+    add_n: int,
+    delete_n: int,
+    cfg: Mapping[str, Any],
+    **kwargs,  # noqa: ARG001
+) -> None:
     """Upsert + delete small batch and re-search."""
     params = cfg["backends"][backend]
     hf_dir = hf_dir or cfg["embedding"]["out_hf_dir"]
     add_n = add_n or int(cfg["update"]["add_count"])
-    del_n = delete or int(cfg["update"]["delete_count"])
+    del_n = delete_n or int(cfg["update"]["delete_count"])
 
     ds = load_from_disk(hf_dir)
     x = np.stack(ds["embedding"]).astype("float32")
@@ -223,46 +259,53 @@ def cmd_update(backend: str, hf_dir: Path, add_n: int, delete: int, cfg: Mapping
     logger.info("Update complete.", be.stats())
 
 
-def cmd_run_all(size: str, backend: str, cfg: Mapping[str, Any]) -> None:
+def cmd_run_all(
+    size: str,
+    backend: str = "faiss.ivfpq",
+    cfg: Mapping[str, Any] = {},
+    **kwargs,  # noqa: ARG001
+) -> None:
     """Run end-to-end benchmark with all steps."""
 
-    # minimal run for small dataset
-    class A:
-        pass
+    cmd_download(
+        size=size,
+        out_dir=Path(cfg["dataset"]["out_dir"]),
+        perform_export_images=False,
+        cfg=cfg,
+    )
 
-    a = A()
-    a.size = size or "small"
-    a.out_dir = cfg["dataset"]["out_dir"]
-    a.export_images = False
-    cmd_download(a, cfg)
-
-    b = A()
-    b.model_id = cfg["embedding"]["model_id"]
-    b.batch = int(cfg["embedding"]["batch"])
-    b.raw_dir = cfg["dataset"]["out_dir"]
-    b.emb_dir = cfg["embedding"]["out_dir"]
-    cmd_embed(b, cfg)
+    cmd_embed(
+        model_id=cfg["embedding"]["model_id"],
+        batch_size=int(cfg["embedding"]["batch"]),
+        raw_dir=Path(cfg["dataset"]["out_dir"]),
+        emb_dir=Path(cfg["embedding"]["out_dir"]),
+        cfg=cfg,
+    )
 
     # Build FAISS Flat baseline then chosen backend
     for be in ["faiss.flat", backend or "faiss.ivfpq"]:
-        c = A()
-        c.backend = be
-        c.hf_dir = cfg["embedding"]["out_hf_dir"]
-        cmd_build(c, cfg)
+        cmd_build(
+            backend=be,
+            hf_dir=cfg["embedding"]["out_hf_dir"],
+            cfg=cfg,
+        )
 
-    d = A()
-    d.backend = backend or "faiss.ivfpq"
-    d.hf_dir = cfg["embedding"]["out_hf_dir"]
-    d.topk = 10
-    d.queries = cfg["search"]["queries_file"]
-    cmd_search(d, cfg)
+    path = Path(__file__).parent.parent
+    cmd_search(
+        backend=backend,
+        hf_dir=cfg["embedding"]["out_hf_dir"],
+        topk=10,
+        queries=path / cfg["search"]["queries_file"],
+        cfg=cfg,
+    )
 
-    e = A()
-    e.backend = backend or "faiss.ivfpq"
-    e.hf_dir = cfg["embedding"]["out_hf_dir"]
-    e.add = None
-    e.delete = None
-    cmd_update(e, cfg)
+    cmd_update(
+        backend=backend,
+        hf_dir=cfg["embedding"]["out_hf_dir"],
+        add_n=None,
+        delete_n=None,
+        cfg=cfg,
+    )
 
 
 def main() -> None:
@@ -271,7 +314,7 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("download", help="Download HF dataset and optionally export images")
-    sp.add_argument("--size", choices=["small", "large", "xlarge", "xxlarge"], default="small")
+    sp.add_argument("--size", choices=("small", "large", "xlarge", "xxlarge"), default="small")
     sp.add_argument("--out_dir", default=None)
     sp.add_argument("--export-images", action="store_true")
     sp.add_argument("--no-export-images", dest="export_images", action="store_false")
@@ -312,7 +355,7 @@ def main() -> None:
 
     args = p.parse_args()
     cfg = load_cfg(BENCHMARK_CFG)
-    args.func(args, cfg)
+    args.func(cfg=cfg, **vars(args))
 
 
 if __name__ == "__main__":

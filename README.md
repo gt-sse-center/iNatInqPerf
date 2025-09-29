@@ -46,7 +46,7 @@ uv venv .venv && source .venv/bin/activate
 uv sync
 
 # Run a small end-to-end benchmark (FAISS IVF+PQ vectordb)
-uv run python src/inatinqperf/benchmark/benchmark.py run-all --size small --vectordb faiss.ivfpq
+uv run python src/inatinqperf/benchmark/benchmark.py run-all --dataset-size small --vectordb faiss.ivfpq
 ```
 
 ---
@@ -57,21 +57,21 @@ Fetch a dataset from Hugging Face, slice by size, and optionally export JPEGs wi
 
 ```bash
 # Small slice (200 samples, exports JPEGs)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size small --out_dir data/raw --export-images
+uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size small --out_dir data/raw --export-images
 
 # Large (full train split only)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size large --out_dir data/raw
+uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size large --out_dir data/raw
 
 # XL (train+val+test)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size xlarge --out_dir data/raw
+uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size xlarge --out_dir data/raw
 
 # XXL (all data)
-uv run python src/inatinqperf/benchmark/benchmark.py download --size xxlarge --out_dir data/raw
+uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size xxlarge --out_dir data/raw
 ```
 
 ### Options
 
-- `--size` : `small`, `large`, `xlarge`, `xxlarge`
+- `--dataset-size` : `small`, `large`, `xlarge`, `xxlarge`
 - `--out_dir` : output folder (default: `data/raw`)
 - `--export-images` : save JPEGs + `manifest.csv`
 - `--no-export-images` : keep HF Arrow dataset only
@@ -135,7 +135,7 @@ uv run python src/inatinqperf/benchmark/benchmark.py build --vectordb faiss.ivfp
 Profile query latency and compute Recall@K vs FAISS Flat baseline.
 
 ```bash
-uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries bench/queries.txt
+uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries benchmark/queries.txt
 ```
 
 **Outputs:**
@@ -151,7 +151,7 @@ uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivf
 Simulate real-time usage: insert (upsert) and delete vectors.
 
 ```bash
-uv python src/inatinqperf/benchmark/benchmark.py update --vectordb faiss.ivfpq --hf_dir data/emb_hf
+uv run python src/inatinqperf/benchmark/benchmark.py update --vectordb faiss.ivfpq --hf_dir data/emb_hf
 ```
 
 Configurable counts via `configs/benchmark.yaml`:

@@ -1,4 +1,5 @@
-# tests/test_vectordb.py
+"""Tests for vector database operations."""
+
 import numpy as np
 import pytest
 
@@ -40,20 +41,20 @@ class DummyVectorDatabase(VectorDatabase):
         self._ids = np.zeros((0,), dtype=np.int64)
         self._dropped = False
 
-    def train(self, X_train: np.ndarray):
+    def train_index(self, x_train: np.ndarray):
         # Should be a no-op for this dummy; just validate dims
-        assert self._dim == X_train.shape[1]
+        assert self._dim == x_train.shape[1]
 
-    def upsert(self, ids: np.ndarray, X: np.ndarray):
-        assert self._dim == X.shape[1]
-        assert ids.shape[0] == X.shape[0]
+    def upsert(self, ids: np.ndarray, x: np.ndarray):
+        assert self._dim == x.shape[1]
+        assert ids.shape[0] == x.shape[0]
         # Remove any existing ids first (upsert semantics)
         mask_keep = np.isin(self._ids, ids, invert=True)
         self._ids = self._ids[mask_keep]
         self._X = self._X[mask_keep]
         # Append new
         self._ids = np.concatenate([self._ids, ids.astype(np.int64)])
-        self._X = np.vstack([self._X, X.astype(np.float32)])
+        self._X = np.vstack([self._X, x.astype(np.float32)])
 
     def _sim(self, Q: np.ndarray, X: np.ndarray) -> np.ndarray:
         if self._metric in ("ip", "inner_product", "dot", "cosine"):
@@ -68,14 +69,14 @@ class DummyVectorDatabase(VectorDatabase):
         else:
             raise ValueError(f"unsupported metric {self._metric}")
 
-    def search(self, Q: np.ndarray, topk: int, **kwargs):
+    def search(self, q: np.ndarray, topk: int, **kwargs):
         assert self._X is not None and self._ids is not None
-        assert Q.shape[1] == self._X.shape[1]
-        sims = self._sim(Q.astype(np.float32), self._X)
+        assert q.shape[1] == self._X.shape[1]
+        sims = self._sim(q.astype(np.float32), self._X)
         # argsort descending (higher score = better)
         idx = np.argpartition(-sims, kth=min(topk - 1, sims.shape[1] - 1), axis=1)[:, :topk]
         # sort each row fully
-        row_indices = np.arange(Q.shape[0])[:, None]
+        row_indices = np.arange(q.shape[0])[:, None]
         top_scores = sims[row_indices, idx]
         order = np.argsort(-top_scores, axis=1)
         idx_sorted = idx[row_indices, order]
@@ -91,7 +92,7 @@ class DummyVectorDatabase(VectorDatabase):
             "dropped": bool(self._dropped),
         }
 
-    def drop(self):
+    def drop_index(self):
         self._X = None
         self._ids = None
         self._dropped = True
@@ -126,7 +127,7 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
     db = DummyVectorDatabase(dim=2, metric=metric)
 
     # train should be a no-op but must accept input
-    db.train(X)
+    db.train_index(X)
 
     # upsert vectors
     db.upsert(ids, X)
@@ -158,7 +159,7 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
     assert st2["ntotal"] == 2
 
     # drop should release data
-    db.drop()
+    db.drop_index()
     assert db.stats()["dropped"] is True
 
 
@@ -176,7 +177,7 @@ def test_upsert_replaces_existing(tiny_dataset):
 
     # Query should reflect updated vectors
     Q = np.array([[2.0, 1.0]], dtype=np.float32)
-    D, I = db.search(Q, topk=1)
+    _, I = db.search(Q, topk=1)
     assert I.shape == (1, 1)
     # With IP and shifted vectors, id 12 ([2,2]) should db the best match
     assert I[0, 0] in ids

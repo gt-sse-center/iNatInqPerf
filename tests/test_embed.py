@@ -73,9 +73,11 @@ def test_pilify_invalid_type():
 
 def test_embed_images_empty_dataset(monkeypatch):
     monkeypatch.setattr(embed, "load_from_disk", lambda _: [])
-    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
     monkeypatch.setattr(
-        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+        embed, "CLIPModel", type("M", (), {"from_pretrained": lambda *args, **kwargs: DummyModel()})
+    )
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda *args, **kwargs: DummyProcessor()})
     )
 
     dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch=2)
@@ -94,9 +96,11 @@ def test_embed_images_model_error(monkeypatch):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(embed, "load_from_disk", lambda _: [{"image": Image.new("RGB", (8, 8)), "label": 0}])
-    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: BrokenModel()}))
     monkeypatch.setattr(
-        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+        embed, "CLIPModel", type("M", (), {"from_pretrained": lambda *args, **kwargs: BrokenModel()})
+    )
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda *args, **kwargs: DummyProcessor()})
     )
 
     with pytest.raises(RuntimeError):
@@ -107,7 +111,9 @@ def test_to_hf_dataset_structure():
     X = np.ones((3, 4))
     ids = [1, 2, 3]
     labels = ["a", "b", "c"]
-    ds = embed.to_hf_dataset(X, ids, labels)
+    dse = embed.ImageDatasetWithEmbeddings(X, ids, labels)
+
+    ds = embed.to_hf_dataset(dse)
     assert set(ds.column_names) == {"id", "label", "embedding"}
     assert isinstance(ds[0]["embedding"], list)
     assert ds[0]["id"] == 1
@@ -115,6 +121,8 @@ def test_to_hf_dataset_structure():
 
 
 def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
+    """Test embedding images and saving to HuggingFace dataset format."""
+
     # Fake dataset: two records with images + labels
     class FakeDataset(list):
         def __getitem__(self, i):
@@ -122,9 +130,11 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
 
     ds = FakeDataset([{"image": Image.new("RGB", (8, 8), color=(i, i, i)), "label": i} for i in range(4)])
     monkeypatch.setattr(embed, "load_from_disk", lambda path: ds)
-    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
     monkeypatch.setattr(
-        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+        embed, "CLIPModel", type("M", (), {"from_pretrained": lambda *args, **kwargs: DummyModel()})
+    )
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda *args, **kwargs: DummyProcessor()})
     )
 
     dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch=2)
@@ -137,16 +147,18 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
     assert labels == [0, 1, 2, 3]
 
     # Convert to HF dataset structure
-    hf_ds = embed.to_hf_dataset(X, ids, labels)
+    hf_ds = embed.to_hf_dataset(dataset_with_embeddings)
     assert set(hf_ds.column_names) == {"id", "label", "embedding"}
     assert len(hf_ds) == 4
     assert isinstance(hf_ds[0]["embedding"], list)
 
 
 def test_embed_text(monkeypatch):
-    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
     monkeypatch.setattr(
-        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+        embed, "CLIPModel", type("M", (), {"from_pretrained": lambda *args, **kwargs: DummyModel()})
+    )
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda *args, **kwargs: DummyProcessor()})
     )
 
     X = embed.embed_text(["hello", "world"], "dummy-model")
@@ -155,9 +167,11 @@ def test_embed_text(monkeypatch):
 
 
 def test_embed_text_empty(monkeypatch):
-    monkeypatch.setattr(embed, "CLIPModel", type("M", (), {"from_pretrained": lambda _: DummyModel()}))
     monkeypatch.setattr(
-        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda _: DummyProcessor()})
+        embed, "CLIPModel", type("M", (), {"from_pretrained": lambda *args, **kwargs: DummyModel()})
+    )
+    monkeypatch.setattr(
+        embed, "CLIPProcessor", type("P", (), {"from_pretrained": lambda *args, **kwargs: DummyProcessor()})
     )
 
     X = embed.embed_text([], "dummy-model")

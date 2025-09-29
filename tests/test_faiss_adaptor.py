@@ -1,5 +1,4 @@
-import contextlib
-import io
+"""Tests for the different FAISS adaptor classes."""
 
 import numpy as np
 import pytest
@@ -20,6 +19,23 @@ def small_data_fixture():
         dtype=np.float32,
     )
     ids = np.array([100, 101, 102, 103], dtype=np.int64)
+    return ids, X
+
+
+@pytest.fixture(name="ivfpq_small_trainset")
+def ivfpq_small_trainset_fixture():
+    """A small dataset with at least 156 vectors since FAISS sets the
+    minimum number of training vectors per cluster to be 39 and the
+    number of centroids to be 2^nbits = 2^2 = 4, which gives
+    4*39 = 156.
+
+    https://github.com/facebookresearch/faiss/blob/3b14dad6d9ac48a0764e5ba01a45bca1d7d738ee/faiss/Clustering.h#L43
+    """
+    rng = np.random.default_rng()
+    N = 160
+    X = rng.standard_normal((N, 2))
+
+    ids = np.arange(N)
     return ids, X
 
 
@@ -56,7 +72,7 @@ def test_faiss_flat_lifecycle(metric, small_data):
     assert be.stats()["ntotal"] == 2
 
     # drop releases index (idempotent)
-    be.drop()
+    be.drop_index()
     assert getattr(be, "index", None) is None
 
 
@@ -68,9 +84,7 @@ def test_faiss_ivfpq_train_and_search_with_large_training(ivfpq_trainset, small_
     be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
 
     # training on sufficient dataset (silence FAISS native stderr warnings)
-    _buf = io.StringIO()
-    with contextlib.redirect_stderr(_buf):
-        be.train(X_train)
+    be.train_index(X_train)
 
     # upsert a small, known set for deterministic checks
     be.upsert(ids, X)
@@ -94,7 +108,7 @@ def test_faiss_ivfpq_train_and_search_with_large_training(ivfpq_trainset, small_
     assert be.stats()["ntotal"] == len(ids) - 1
 
     # drop releases resources
-    be.drop()
+    be.drop_index()
     assert getattr(be, "index", None) is None
 
 
@@ -104,9 +118,7 @@ def test_faiss_ivfpq_l2_metric_delete_and_drop(ivfpq_trainset, small_data):
 
     # Fewer centroids to prevent FAISS training warnings
     be = FaissIVFPQ(dim=2, metric="l2", nlist=2, m=1, nbits=4, nprobe=2)
-    _buf = io.StringIO()
-    with contextlib.redirect_stderr(_buf):
-        be.train(X_train)
+    be.train_index(X_train)
     be.upsert(ids, X)
 
     # Search with L2 metric; still expect small_data ids to appear
@@ -126,8 +138,8 @@ def test_faiss_ivfpq_l2_metric_delete_and_drop(ivfpq_trainset, small_data):
     assert be.stats()["ntotal"] == len(ids) - 1
 
     # Drop twice to exercise idempotency
-    be.drop()
-    be.drop()
+    be.drop_index()
+    be.drop_index()
     assert getattr(be, "index", None) is None
 
 
@@ -137,9 +149,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
     ids, X = small_data
 
     be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=1)
-    _buf = io.StringIO()
-    with contextlib.redirect_stderr(_buf):
-        be.train(X_train)
+    be.train_index(X_train)
 
     # First insert
     be.upsert(ids, X)
@@ -158,7 +168,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
     assert D1.shape == D2.shape == (1, 3)
     assert I1.shape == I2.shape == (1, 3)
 
-    be.drop()
+    be.drop_index()
 
 
 def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
@@ -178,29 +188,26 @@ def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
     be.delete([999, 1000])
     assert be.stats()["ntotal"] == nt_before
 
-    be.drop()
-    be.drop()
+    be.drop_index()
+    be.drop_index()
     assert getattr(be, "index", None) is None
 
 
 def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
     # Build a real IVFPQ index and ensure unwrap hits the IVF layer
     be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
-    _buf = io.StringIO()
-    with contextlib.redirect_stderr(_buf):
-        be.train(ivfpq_trainset[1])
+    be.train_index(ivfpq_trainset[1])
+
     ivf = faiss_adaptor._unwrap_to_ivf(be.index.index)
     assert ivf is not None and hasattr(ivf, "nlist")
-    be.drop()
+    be.drop_index()
 
 
 def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data):
     # Cosine path should map to inner-product internally
     ids, X = small_data
     be = FaissIVFPQ(dim=2, metric="cosine", nlist=2, m=1, nbits=4, nprobe=2)
-    _buf = io.StringIO()
-    with contextlib.redirect_stderr(_buf):
-        be.train(ivfpq_trainset[1])
+    be.train_index(ivfpq_trainset[1])
     be.upsert(ids, X)
 
     Q = np.array([[1.0, 0.0]], dtype=np.float32)
@@ -209,21 +216,19 @@ def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data
     assert D.shape == (1, 10) and I.shape == (1, 10)
     valid = I[I >= 0]
     assert set(valid.flatten()).issubset(set(ids))
-    be.drop()
+    be.drop_index()
 
 
 def test_faiss_ivfpq_empty_delete_noop(ivfpq_trainset, small_data):
     ids, X = small_data
     be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
-    _buf = io.StringIO()
-    with contextlib.redirect_stderr(_buf):
-        be.train(ivfpq_trainset[1])
+    be.train_index(ivfpq_trainset[1])
     be.upsert(ids, X)
 
     # Empty delete should be a no-op
     be.delete([])
     assert be.stats()["ntotal"] == len(ids)
-    be.drop()
+    be.drop_index()
 
 
 def test_unwrap_fallback_dummy_chain():
@@ -242,27 +247,21 @@ def test_unwrap_fallback_dummy_chain():
     assert out is not None and hasattr(out, "nlist") and out.nlist == 5
 
 
-## The following test needs to be debugged
-# def test_faiss_ivfpq_reduces_nlist_and_clamps_nprobe(small_data):
-#     """Cover train() branch that rebuilds with smaller nlist and clamps nprobe to nlist."""
-#     ids, X = small_data
-#     # Start with large nlist, tiny PQ (nbits=2, m=1) so training with small set succeeds and triggers reduce.
-#     be = FaissIVFPQ(dim=2, metric="ip", nlist=64, m=1, nbits=2)  # nprobe defaults to 32
-#     _, X_train = ivfpq_trainset  # 10,240 x 2
-#     #X_train = np.array([[1.0, 0.0], [0.0, 1.0], [0.5, 0.1], [0.2, 0.3], [0.9, 0.2], [0.1, 0.8], [0.3, 0.4], [0.7, 0.6]], dtype=np.float32)
-#     _buf = io.StringIO()
-#     with contextlib.redirect_stderr(_buf):
-#         be.train(X_train)
-#     s = be.stats()
-#     assert s["kind"] == "ivfpq"
-#     # nlist reduced to <= number of training points
-#     assert s["nlist"] is None or int(s["nlist"]) <= X_train.shape[0]
-#     # nprobe clamped to nlist (default nprobe is 32, so expect <= nlist)
-#     if s.get("nlist") is not None and s.get("nprobe") is not None:
-#         assert int(s["nprobe"]) <= int(s["nlist"])
+# The following test needs to be debugged
+def test_faiss_ivfpq_reduces_nlist_and_clamps_nprobe(ivfpq_small_trainset):
+    """Cover train_index() branch that rebuilds with smaller nlist and clamps nprobe to nlist."""
+    # Start with large nlist, tiny PQ (nbits=2, m=1)
+    # so training with small set triggers reduce.
+    vdb = FaissIVFPQ(dim=2, metric="ip", nlist=64, m=1, nbits=2)  # nprobe defaults to 32
 
-#     # Upsert and search still function
-#     be.upsert(ids, X)
-#     D, I = be.search(np.array([[1.0, 0.0]], dtype=np.float32), topk=2)
-#     assert D.shape == (1, 2) and I.shape == (1, 2)
-#     be.drop()
+    _, X = ivfpq_small_trainset
+    vdb.train_index(X)
+
+    s = vdb.stats()
+    assert s["kind"] == "ivfpq"
+
+    # nlist reduced to <= number of training points
+    assert s["nlist"] <= X.shape[0]
+
+    # nprobe clamped to nlist (default nprobe is 32, so expect <= nlist)
+    assert s["nprobe"] <= s["nlist"]

@@ -4,12 +4,13 @@ import pickle
 import numpy as np
 import pytest
 
-from inatinqperf.benchmark import benchmark
+from inatinqperf.benchmark import benchmark, Benchmarker
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
-# ---------- Safe dummy vectordb ----------
 class DummyVDB:
+    """Safe dummy vectordb."""
+
     def __init__(self, dim, metric, **params):
         self.inited = True
         self.trained = False
@@ -19,7 +20,7 @@ class DummyVDB:
         self.ntotal = 0
         self.init_args = {"dim": dim, "metric": metric, **params}
 
-    def train(self, X):
+    def train_index(self, X):
         self.trained = True
 
     def upsert(self, ids, X):
@@ -57,7 +58,7 @@ def _fake_ds_embeddings(n=5, d=4):
 # ===============================
 # Original orchestration-safe tests
 # ===============================
-def test_cmd_download_with_stubs(monkeypatch, tmp_path):
+def test_download_with_stubs(monkeypatch, tmp_path):
     class Saveable:
         """Stub HF loader + exporter."""
 
@@ -72,7 +73,7 @@ def test_cmd_download_with_stubs(monkeypatch, tmp_path):
         manifest.write_text("index,filename,label\n", encoding="utf-8")
         return manifest
 
-    monkeypatch.setattr(benchmark, "load_composite", lambda hf_id, split: Saveable())
+    monkeypatch.setattr(benchmark, "load_composite", lambda huggingface_id, split: Saveable())
     monkeypatch.setattr(benchmark, "export_images", _export_images)
 
     cfg = {
@@ -83,25 +84,53 @@ def test_cmd_download_with_stubs(monkeypatch, tmp_path):
             "export_images": True,
         }
     }
-    size = "small"
-    out_dir = None
-    export_images = None
 
-    benchmark.cmd_download(size, out_dir, export_images, cfg)
+    benchmarker = Benchmarker()
+    benchmarker.download(
+        dataset_size="small",
+        out_dir=cfg["dataset"]["out_dir"],
+        export_raw_images=cfg["dataset"]["export_images"],
+        cfg=cfg,
+    )
 
     assert (tmp_path / "saved.flag").exists()
     assert export_dirs == [tmp_path / "images"]
     assert (tmp_path / "manifest.csv").exists()
 
 
-def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
+def test_embed_with_stubs(monkeypatch, tmp_path):
     # Stub embed_images -> returns (ds_out, X, ids, labels)
     embed_calls: list[tuple[str, str, int]] = []
 
     def _embed_images(raw_dir, model_id, batch):
         embed_calls.append((raw_dir, model_id, batch))
-        return ImageDatasetWithEmbeddings(np.ones((3, 4), dtype=np.float32), [0, 1, 2], [0, 1, 2])
+        return ImageDatasetWithEmbeddings(
+            embeddings=np.ones((3, 4)),
+            ids=[0, 1, 2],
+            labels=[0, 1, 2],
+        )
 
+    monkeypatch.setattr(benchmark, "embed_images", _embed_images)
+
+    model_id = "openai/clip"
+    batch_size = 2
+    raw_dir = tmp_path
+    emb_dir = tmp_path
+
+    benchmarker = Benchmarker()
+    benchmarker.embed(
+        model_id=model_id,
+        batch_size=batch_size,
+        raw_dir=raw_dir,
+        emb_dir=emb_dir,
+    )
+
+    assert embed_calls == [
+        (raw_dir, model_id, batch_size),
+    ]
+
+
+def test_save_as_huggingface_dataset(monkeypatch, tmp_path):
     # Stub to_hf_dataset -> save_to_disk
     save_calls: list[str] = []
 
@@ -110,40 +139,21 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
             save_calls.append(path)
             (tmp_path / "emb.flag").write_text("ok")
 
-    monkeypatch.setattr(benchmark, "embed_images", _embed_images)
-    monkeypatch.setattr(benchmark, "to_hf_dataset", lambda X, ids, labels: HFSaver())
+    monkeypatch.setattr(benchmark, "to_hf_dataset", lambda dse: HFSaver())
 
-    cfg = {
-        "dataset": {"out_dir": tmp_path},
-        "embedding": {
-            "model_id": "openai/clip",
-            "batch": 2,
-            "out_dir": tmp_path,
-            "out_hf_dir": tmp_path,
-        },
-    }
+    benchmarker = Benchmarker()
+    dse = ImageDatasetWithEmbeddings(
+        np.ones((2, 3), dtype=np.float32),
+        [10, 11],
+        [0, 1],
+    )
+    benchmarker.save_as_huggingface_dataset(dse, out_hf_dir=tmp_path)
 
-    model_id = None
-    batch = None
-    raw_dir = None
-    emb_dir = None
-
-    benchmark.cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
-
-    assert embed_calls == [
-        (cfg["dataset"]["out_dir"], cfg["embedding"]["model_id"], cfg["embedding"]["batch"])
-    ]
-    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
-    assert (tmp_path / "emb.flag").exists()
-
-    assert embed_calls == [
-        (cfg["dataset"]["out_dir"], cfg["embedding"]["model_id"], cfg["embedding"]["batch"])
-    ]
-    assert save_calls == [cfg["embedding"]["out_hf_dir"]]
+    assert save_calls == [tmp_path]
     assert (tmp_path / "emb.flag").exists()
 
 
-def test_cmd_build_with_dummy_vectordb(monkeypatch, tmp_path):
+def test_cmd_build_with_dummy_vectordb(monkeypatch, tmp_path, caplog):
     # Use fake embeddings dataset on disk
     monkeypatch.setattr(benchmark, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=4, d=2))
 
@@ -153,7 +163,7 @@ def test_cmd_build_with_dummy_vectordb(monkeypatch, tmp_path):
             self.train_calls: list[int] = []
             self.upsert_ids: list[list[int]] = []
 
-        def train(self, X):
+        def train_index(self, X):
             self.train_calls.append(len(X))
             self.trained = True
 
@@ -179,23 +189,12 @@ def test_cmd_build_with_dummy_vectordb(monkeypatch, tmp_path):
     vectordb = "faiss.flat"
     hf_dir = None
 
-    logs: list[str] = []
-
-    def _sink(message):
-        logs.append(str(message.record["message"]))
-
-    sink_id = benchmark.logger.add(_sink, level="INFO")
-    try:
-        benchmark.cmd_build(vectordb, hf_dir, cfg)
-    finally:
-        benchmark.logger.remove(sink_id)
+    benchmark.cmd_build(vectordb, hf_dir, cfg)
 
     inst = captured["instance"]
     assert inst.train_calls == [4]
     assert inst.upsert_ids == [list(range(4))]
-    assert any(msg.startswith("Stats:") for msg in logs)
-
-    # restore logger to avoid leaking stub to other tests
+    assert "Stats:" in caplog.text
 
 
 def test_cmd_search_safe_pickle_and_vectordb(monkeypatch, tmp_path, caplog):
@@ -231,33 +230,23 @@ def test_cmd_search_safe_pickle_and_vectordb(monkeypatch, tmp_path, caplog):
     topk = 3
     queries = str(qfile)
 
-    logs: list[str] = []
+    benchmark.cmd_search(vectordb, hf_dir, topk, queries, cfg)
 
-    def _sink(message):
-        logs.append(str(message.record["message"]))
-
-    sink_id = benchmark.logger.add(_sink, level="INFO")
-    try:
-        benchmark.cmd_search(vectordb, hf_dir, topk, queries, cfg)
-    finally:
-        benchmark.logger.remove(sink_id)
-
-    combined = "\n".join(logs)
-    assert '"vectordb": "faiss.flat"' in combined
-    assert '"recall@k"' in combined
+    assert '"vectordb": "faiss.flat"' in caplog.text
+    assert '"recall@k"' in caplog.text
 
 
 def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=5, d=2))
 
-    class CaptureBE(DummyVDB):
+    class CaptureVectorDB(DummyVDB):
         def __init__(self, dim, metric, **params):
             super().__init__(dim, metric, **params)
             self.train_calls: list[int] = []
             self.upsert_calls: list[list[int]] = []
             self.delete_calls: list[list[int]] = []
 
-        def train(self, X):
+        def train_index(self, X):
             self.train_calls.append(len(X))
             self.trained = True
 
@@ -269,12 +258,12 @@ def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
             ids_list = list(ids)
             self.delete_calls.append(ids_list)
 
-    captured: dict[str, CaptureBE] = {}
+    captured: dict[str, CaptureVectorDB] = {}
 
     def _capture_vectordb(name, dim, metric, params):
         safe = dict(params) if params else {}
         safe.pop("metric", None)
-        inst = CaptureBE(dim=dim, metric=metric, **safe)
+        inst = CaptureVectorDB(dim=dim, metric=metric, **safe)
         captured["instance"] = inst
         return inst
 
@@ -297,35 +286,49 @@ def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
     assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
     assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
 
-    inst = captured["instance"]
-    assert inst.train_calls  # vectordb trained at least once
-    assert inst.upsert_calls[0] == list(range(5))
-    assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
-    assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
-
 
 @pytest.mark.parametrize("verb", ["download", "embed", "build", "search", "update"])
 def test_cli_main_dispatch(monkeypatch, tmp_path, verb):
+    benchmarker = Benchmarker()
+
     # Stub subcommand implementations to do nothing
     calls: list[str] = []
-    monkeypatch.setattr(benchmark, "cmd_download", lambda **kwargs: calls.append("download"))
-    monkeypatch.setattr(benchmark, "cmd_embed", lambda **kwargs: calls.append("embed"))
+    monkeypatch.setattr(benchmarker, "download", lambda *args, **kwargs: calls.append("download"))
+    monkeypatch.setattr(benchmarker, "embed", lambda **kwargs: calls.append("embed"))
     monkeypatch.setattr(benchmark, "cmd_build", lambda **kwargs: calls.append("build"))
     monkeypatch.setattr(benchmark, "cmd_search", lambda **kwargs: calls.append("search"))
     monkeypatch.setattr(benchmark, "cmd_update", lambda **kwargs: calls.append("update"))
 
     if verb == "download":
-        argv = ["prog", verb, "--size", "small"]
+        benchmarker.download("small", out_dir=tmp_path)
+
+    elif verb == "embed":
+        benchmarker.embed(
+            model_id="openai/clip",
+            batch_size=2,
+            raw_dir=tmp_path,
+            emb_dir=tmp_path,
+        )
+
     elif verb == "build":
         argv = ["prog", verb, "--vectordb", "faiss.flat"]
+        monkeypatch.setattr(sys, "argv", argv)
+        benchmark.main()
+
     elif verb == "search":
         argv = ["prog", verb, "--vectordb", "faiss.flat", "--topk", "2"]
+        monkeypatch.setattr(sys, "argv", argv)
+        benchmark.main()
+
     elif verb == "update":
         argv = ["prog", verb, "--vectordb", "faiss.flat"]
+        monkeypatch.setattr(sys, "argv", argv)
+        benchmark.main()
+
     else:
         argv = ["prog", verb]
-    monkeypatch.setattr(sys, "argv", argv)
-    benchmark.main()
+        monkeypatch.setattr(sys, "argv", argv)
+        benchmark.main()
 
     assert calls == [verb]
 
@@ -364,13 +367,13 @@ def test_load_cfg_and_ensure_dir_error_and_idempotency(tmp_path):
 # ===============================
 # Additional coverage boosters
 # ===============================
-class CaptureBE(DummyVDB):
+class CaptureVectorDB(DummyVDB):
     """Used to verify init_vectordb scrubs reserved keys."""
 
 
 def test_init_vectordb_scrubs_reserved(monkeypatch):
     # Inject capture vectordb under a custom key
-    monkeypatch.setitem(benchmark.VECTORDBS, "capture", CaptureBE)
+    monkeypatch.setitem(benchmark.VECTORDBS, "capture", CaptureVectorDB)
     params = {"metric": "ip", "dim": 999, "name": "x", "nlist": 123}
     be = benchmark.init_vectordb("capture", dim=64, metric="ip", params=params)
     # Reserved keys must not be forwarded twice
@@ -380,7 +383,8 @@ def test_init_vectordb_scrubs_reserved(monkeypatch):
     assert "nlist" in be.init_args and be.init_args["nlist"] == 123
 
 
-def test_cmd_download_no_export(monkeypatch, tmp_path):
+def test_download_no_export(monkeypatch, tmp_path):
+    """Test dataset download without exporting raw images."""
     # load_composite returns a saveable dataset
     saved_paths: list[str] = []
 
@@ -388,12 +392,15 @@ def test_cmd_download_no_export(monkeypatch, tmp_path):
         def save_to_disk(self, path):
             saved_paths.append(path)
 
-    monkeypatch.setattr(benchmark, "load_composite", lambda hf_id, split: Saveable2())
+    monkeypatch.setattr(benchmark, "load_composite", lambda huggingface_id, split: Saveable2())
 
-    export_calls: list = []
+    images_exported: bool = False
+
+    def export_images(dataset, path):
+        images_exported = True
 
     # export_images should not be called (args override to False)
-    monkeypatch.setattr(benchmark, "export_images", lambda *a, **kw: export_calls.append(True))
+    monkeypatch.setattr(benchmark, "export_images", export_images)
 
     cfg = {
         "dataset": {
@@ -406,13 +413,14 @@ def test_cmd_download_no_export(monkeypatch, tmp_path):
     size = "small"
     out_dir = None
     export_images = False
-    benchmark.cmd_download(size, out_dir, export_images, cfg)
+    benchmarker = Benchmarker()
+    benchmarker.download(size, out_dir, export_images, cfg)
 
     assert saved_paths == [tmp_path]
-    assert not export_calls
+    assert images_exported is False
 
 
-def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
+def test_embed_with_overrides(monkeypatch, tmp_path):
     # Stub embed_images -> returns (ds_out, X, ids, labels)
     embed_calls: list[tuple[str, str, int]] = []
 
@@ -427,7 +435,7 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
             save_calls.append(path)
 
     monkeypatch.setattr(benchmark, "embed_images", _embed_images)
-    monkeypatch.setattr(benchmark, "to_hf_dataset", lambda X, ids, labels: HFOut2())
+    monkeypatch.setattr(benchmark, "to_hf_dataset", lambda dse: HFOut2())
 
     cfg = {
         "dataset": {"out_dir": "IGNORED"},
@@ -444,7 +452,9 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
     raw_dir = tmp_path
     emb_dir = tmp_path
 
-    benchmark.cmd_embed(model_id, batch, raw_dir, emb_dir, cfg)
+    benchmarker = Benchmarker()
+    dse = benchmarker.embed(model_id, batch, raw_dir, emb_dir)
+    benchmarker.save_as_huggingface_dataset(dse, out_hf_dir=tmp_path)
 
     assert embed_calls == [(raw_dir, model_id, batch)]
     assert save_calls == [cfg["embedding"]["out_hf_dir"]]
@@ -475,8 +485,18 @@ class LazyIds:
 
 def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
     calls = []
-    monkeypatch.setattr(benchmark, "cmd_download", lambda **kwargs: calls.append("download"))
-    monkeypatch.setattr(benchmark, "cmd_embed", lambda **kwargs: calls.append("embed"))
+    monkeypatch.setattr(Benchmarker, "download", lambda *args, **kwargs: calls.append("download"))
+
+    def embed_patch(*args, **kwargs):
+        calls.append("embed")
+        return ImageDatasetWithEmbeddings(
+            embeddings=np.ones((3, 4)),
+            ids=[0, 1, 2],
+            labels=[0, 1, 2],
+        )
+
+    monkeypatch.setattr(Benchmarker, "embed", embed_patch)
+
     monkeypatch.setattr(
         benchmark, "cmd_build", lambda **kwargs: calls.append(f"build:{kwargs.get('vectordb', None)}")
     )

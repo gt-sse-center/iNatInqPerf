@@ -1,6 +1,29 @@
 """Pytest configuration for shared test setup."""
 
 import os
+import sys
+from loguru import logger
+import tqdm
+import pytest
+
+# Set logging level to ERROR so it doesn't show
+# in test output but is still captured for testing.
+logger.remove()
+logger.add(sys.stderr, level="ERROR")
+
+
+@pytest.fixture(autouse=True)
+def notqdm(monkeypatch):
+    """
+    Replacement for tqdm that just passes back the iterable.
+    Useful to silence `tqdm` in tests.
+    """
+
+    def tqdm_replacement(iterable, *args, **kwargs):
+        return iterable
+
+    monkeypatch.setattr(tqdm, "tqdm", tqdm_replacement)
+
 
 # Keep thread counts low and avoid at-fork init issues that can trip FAISS/Torch on macOS
 os.environ.setdefault("OMP_NUM_THREADS", "1")

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import tqdm
 from datasets import Dataset, Features, Value, load_from_disk
 from datasets import Sequence as HFSequence
 from PIL import Image
-from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
 
 _EMBED_MATRIX_NDIM = 2
@@ -54,7 +54,7 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
     imgs = [pilify(r["image"]) for r in ds]
 
     all_emb, ids, labels = [], [], []
-    for i in tqdm(range(0, len(imgs), batch)):
+    for i in tqdm.tqdm(range(0, len(imgs), batch)):
         batch_imgs = imgs[i : i + batch]
         with torch.no_grad():
             inputs = proc(images=batch_imgs, return_tensors="pt", padding=True).to(device)
@@ -82,18 +82,20 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
 
 
 def to_hf_dataset(
-    embeddings: np.ndarray,
-    ids: Sequence[int] | np.ndarray,
-    labels: Sequence[int | str] | np.ndarray,
+    dataset: ImageDatasetWithEmbeddings,
 ) -> Dataset:
     """Convert embeddings and metadata to a HuggingFace dataset."""
-    emb_dim = embeddings.shape[1] if embeddings.ndim == _EMBED_MATRIX_NDIM and embeddings.shape[1:] else 0
+    emb_dim = (
+        dataset.embeddings.shape[1]
+        if dataset.embeddings.ndim == _EMBED_MATRIX_NDIM and dataset.embeddings.shape[1:]
+        else 0
+    )
 
     try:
-        label_values = [int(y) for y in labels]
+        label_values = [int(y) for y in dataset.labels]
         label_feature = Value("int32")
     except (TypeError, ValueError):
-        label_values = [str(y) for y in labels]
+        label_values = [str(y) for y in dataset.labels]
         label_feature = Value("string")
 
     feats = Features(
@@ -105,9 +107,9 @@ def to_hf_dataset(
     )
     return Dataset.from_dict(
         {
-            "id": [int(i) for i in ids],
+            "id": [int(i) for i in dataset.ids],
             "label": label_values,
-            "embedding": [d.tolist() for d in embeddings],
+            "embedding": [d.tolist() for d in dataset.embeddings],
         },
         features=feats,
     )

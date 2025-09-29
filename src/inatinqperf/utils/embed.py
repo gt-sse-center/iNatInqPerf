@@ -25,16 +25,6 @@ def pilify(img: Image.Image | np.ndarray) -> Image.Image:
     raise TypeError(msg)
 
 
-def get_device() -> str:
-    """Return the accelerator device which is available."""
-    if torch.cuda.is_available():
-        return "cuda"
-    if torch.mps.is_available():
-        return "mps"
-
-    return "cpu"
-
-
 @dataclass
 class ImageDatasetWithEmbeddings:
     """An image dataset with embeddings, IDs and labels."""
@@ -44,12 +34,49 @@ class ImageDatasetWithEmbeddings:
     labels: Sequence[int | str] | np.ndarray
 
 
+class PretrainedCLIPModel:
+    """Helper class for loading and running a pretrained CLIP model."""
+
+    def __init__(self, model_id: str) -> None:
+        self.device = self.get_device()
+        self.proc = CLIPProcessor.from_pretrained(model_id, use_fast=False)
+        self.model = CLIPModel.from_pretrained(model_id).to(self.device)
+
+    @staticmethod
+    def get_device() -> str:
+        """Return the accelerator device which is available."""
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.mps.is_available():
+            return "mps"
+
+        return "cpu"
+
+    def __call__(
+        self,
+        images: np.ndarray | None = None,
+        text: np.ndarray | None = None,
+    ) -> torch.Tensor:
+        """Forward pass of either image or text data."""
+        if images is not None:
+            inputs = self.proc(images=images, return_tensors="pt", padding=True).to(self.device)
+            feats = self.model.get_image_features(**inputs)
+
+        elif text is not None:
+            inputs = self.proc(text=text, return_tensors="pt", padding=True).to(self.device)
+            feats = self.model.get_text_features(**inputs)
+
+        else:
+            raise ValueError("Neither image nor text data provided.")  # noqa: TRY003,EM101
+
+        return torch.nn.functional.normalize(feats, p=2, dim=1)
+
+
 def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEmbeddings:
     """Embed images from a dataset on disk using a CLIP model."""
     ds = load_from_disk(raw_dir)
-    device = get_device()
-    proc = CLIPProcessor.from_pretrained(model_id)
-    model = CLIPModel.from_pretrained(model_id).to(device)
+
+    model = PretrainedCLIPModel(model_id=model_id)
 
     imgs = [pilify(r["image"]) for r in ds]
 
@@ -57,10 +84,9 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
     for i in tqdm.tqdm(range(0, len(imgs), batch)):
         batch_imgs = imgs[i : i + batch]
         with torch.no_grad():
-            inputs = proc(images=batch_imgs, return_tensors="pt", padding=True).to(device)
-            feats = model.get_image_features(**inputs)
-            feats = torch.nn.functional.normalize(feats, p=2, dim=1)
+            feats = model(images=batch_imgs)
             all_emb.append(feats.cpu().numpy().astype(np.float32))
+
         ids.extend([i + j for j in range(len(batch_imgs))])
         labels.extend(
             [int(ds[i + j].get("labels", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
@@ -117,11 +143,9 @@ def to_hf_dataset(
 
 def embed_text(queries: list[str], model_id: str) -> np.ndarray:
     """Embed text queries using a CLIP model."""
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = CLIPModel.from_pretrained(model_id).to(device)
-    proc = CLIPProcessor.from_pretrained(model_id)
+    model = PretrainedCLIPModel(model_id=model_id)
+
     with torch.no_grad():
-        inputs = proc(text=queries, return_tensors="pt", padding=True).to(device)
-        feats = model.get_text_features(**inputs)
-        feats = torch.nn.functional.normalize(feats, p=2, dim=1)
+        feats = model(text=queries)
+
     return feats.cpu().numpy().astype(np.float32)

@@ -90,6 +90,7 @@ class Benchmarker:
 
         ensure_dir(out_hf_dir)
 
+        logger.info(f"Saving dataset to {out_hf_dir}")
         to_hf_dataset(dse).save_to_disk(out_hf_dir)
 
         logger.info(f"Embeddings: {dse.embeddings.shape} -> {out_hf_dir}")
@@ -153,17 +154,17 @@ def cmd_build(
     ds = load_from_disk(hf_dir)
     x = np.stack(ds["embedding"]).astype(np.float32)
     metric = params.get("metric", "ip").lower()
-    be = init_vectordb(vectordb, x.shape[1], metric, params)
+    vdb = init_vectordb(vectordb, x.shape[1], metric, params)
     with Profiler(f"build-{vectordb}"):
         # training if needed
-        be.train(
+        vdb.train_index(
             x
             if x.shape[0] < SAMPLE_SIZE
             else x[np.random.default_rng().choice(x.shape[0], SAMPLE_SIZE, replace=False)]
         )
         ids = np.array(ds["id"], dtype="int64")
-        be.upsert(ids, x)
-    logger.info("Stats:", be.stats())
+        vdb.upsert(ids, x)
+    logger.info(f"Stats: {vdb.stats()}")
 
 
 def cmd_search(
@@ -187,17 +188,24 @@ def cmd_search(
     metric = params.get("metric", "ip").lower()
     # exact baseline
     base = exact_baseline(x, metric="ip" if metric in ("ip", "cosine") else "l2")
+    logger.info("Created exact baseline index")
+
     # vectordb
-    be = init_vectordb(vectordb, x.shape[1], "ip" if metric in ("ip", "cosine") else "l2", params)
-    be.train(
+    vdb = init_vectordb(vectordb, x.shape[1], "ip" if metric in ("ip", "cosine") else "l2", params)
+    logger.info("Initialized vector database")
+    vdb.train_index(
         x
         if x.shape[0] < SAMPLE_SIZE
         else x[np.random.default_rng().choice(x.shape[0], SAMPLE_SIZE, replace=False)]
     )
-    be.upsert(ids, x)
+    vdb.upsert(ids, x)
+    logger.info("Trained index and inserted training data")
 
-    queries = [q.strip() for q in Path(queries_file).read_text(encoding="utf-8").splitlines() if q.strip()]
+    queries_file = Path(__file__).parent.parent / queries_file
+
+    queries = [q.strip() for q in queries_file.read_text(encoding="utf-8").splitlines() if q.strip()]
     q = embed_text(queries, model_id)
+    logger.info("Embedded all queries")
 
     # search + profile
     with Profiler(f"search-{vectordb}") as p:
@@ -205,12 +213,12 @@ def cmd_search(
         _, i0 = base.search(q, topk)  # exact
         for i in tqdm.tqdm(range(q.shape[0])):
             t0 = time.perf_counter()
-            _, _ = be.search(q[i : i + 1], topk, **params)
+            _, _ = vdb.search(q[i : i + 1], topk, **params)
             lat.append((time.perf_counter() - t0) * 1000.0)
         p.sample()
     # recall@K (compare last retrieved to baseline per query)
     # For simplicity compute approximate on whole Q at once:
-    _, i1 = be.search(q, topk, **params)
+    _, i1 = vdb.search(q, topk, **params)
     rec = recall_at_k(i1, i0, topk)
     stats = {
         "vectordb": vectordb,
@@ -241,9 +249,9 @@ def cmd_update(
     ds = load_from_disk(hf_dir)
     x = np.stack(ds["embedding"]).astype(np.float32)
     ids = np.array(ds["id"], dtype="int64")
-    be = init_vectordb(vectordb, x.shape[1], "ip", params)
-    be.train(x[: min(500000, len(x))])
-    be.upsert(ids, x)
+    vdb = init_vectordb(vectordb, x.shape[1], "ip", params)
+    vdb.train_index(x[: min(500000, len(x))])
+    vdb.upsert(ids, x)
 
     # craft new vectors by slight noise around existing (simulating fresh writes)
     rng = np.random.default_rng(42)
@@ -253,20 +261,19 @@ def cmd_update(
     add_ids = np.arange(10_000_000, 10_000_000 + add_n, dtype="int64")
 
     with Profiler(f"update-add-{vectordb}"):
-        be.upsert(add_ids, add_vecs)
+        vdb.upsert(add_ids, add_vecs)
 
     with Profiler(f"update-delete-{vectordb}"):
         del_ids = list(add_ids[:del_n])
-        be.delete(del_ids)
+        vdb.delete(del_ids)
 
-    logger.info("Update complete.", be.stats())
+    logger.info("Update complete.", vdb.stats())
 
 
 def cmd_run_all(
     size: str,
     vectordb: str = "faiss.ivfpq",
-    cfg: Mapping[str, Any] = {},
-    **kwargs,  # noqa: ARG001
+    cfg: Mapping[str, Any] | None = None,
 ) -> None:
     """Run end-to-end benchmark with all steps."""
     benchmarker = Benchmarker()
@@ -289,9 +296,9 @@ def cmd_run_all(
     )
 
     # Build FAISS Flat baseline then chosen vectordb
-    for be in ["faiss.flat", vectordb or "faiss.ivfpq"]:
+    for vdb in ["faiss.flat", vectordb or "faiss.ivfpq"]:
         cmd_build(
-            vectordb=be,
+            vectordb=vdb,
             hf_dir=cfg["embedding"]["out_hf_dir"],
             cfg=cfg,
         )
@@ -346,8 +353,8 @@ def main() -> None:
     sp = sub.add_parser("update", help="Upsert + delete workflow on a vectordb")
     sp.add_argument("--vectordb", required=True, choices=list(VECTORDBS.keys()))
     sp.add_argument("--hf_dir", type=Path, default=None)
-    sp.add_argument("--add", type=int, default=None)
-    sp.add_argument("--delete", type=int, default=None)
+    sp.add_argument("--add_n", type=int, default=None)
+    sp.add_argument("--delete_n", type=int, default=None)
     sp.set_defaults(func=cmd_update)
 
     sp = sub.add_parser(
@@ -369,11 +376,15 @@ def main() -> None:
         )
 
     elif args.cmd == "embed":
-        benchmarker.embed(
+        dse = benchmarker.embed(
             model_id=args.model_id or cfg["embedding"]["model_id"],
             batch_size=args.batch_size or int(cfg["embedding"]["batch"]),
             raw_dir=args.raw_dir or Path(cfg["dataset"]["out_dir"]),
             emb_dir=args.emb_dir or Path(cfg["embedding"]["out_dir"]),
+        )
+        benchmarker.save_as_huggingface_dataset(
+            dse,
+            out_hf_dir=Path(cfg["embedding"]["out_hf_dir"]),
         )
 
     else:

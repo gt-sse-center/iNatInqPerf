@@ -20,7 +20,7 @@ class DummyVDB:
         self.ntotal = 0
         self.init_args = {"dim": dim, "metric": metric, **params}
 
-    def train(self, X):
+    def train_index(self, X):
         self.trained = True
 
     def upsert(self, ids, X):
@@ -163,7 +163,7 @@ def test_cmd_build_with_dummy_vectordb(monkeypatch, tmp_path, caplog):
             self.train_calls: list[int] = []
             self.upsert_ids: list[list[int]] = []
 
-        def train(self, X):
+        def train_index(self, X):
             self.train_calls.append(len(X))
             self.trained = True
 
@@ -239,14 +239,14 @@ def test_cmd_search_safe_pickle_and_vectordb(monkeypatch, tmp_path, caplog):
 def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=5, d=2))
 
-    class CaptureBE(DummyVDB):
+    class CaptureVectorDB(DummyVDB):
         def __init__(self, dim, metric, **params):
             super().__init__(dim, metric, **params)
             self.train_calls: list[int] = []
             self.upsert_calls: list[list[int]] = []
             self.delete_calls: list[list[int]] = []
 
-        def train(self, X):
+        def train_index(self, X):
             self.train_calls.append(len(X))
             self.trained = True
 
@@ -258,12 +258,12 @@ def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
             ids_list = list(ids)
             self.delete_calls.append(ids_list)
 
-    captured: dict[str, CaptureBE] = {}
+    captured: dict[str, CaptureVectorDB] = {}
 
     def _capture_vectordb(name, dim, metric, params):
         safe = dict(params) if params else {}
         safe.pop("metric", None)
-        inst = CaptureBE(dim=dim, metric=metric, **safe)
+        inst = CaptureVectorDB(dim=dim, metric=metric, **safe)
         captured["instance"] = inst
         return inst
 
@@ -279,12 +279,6 @@ def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
     add_n = None
     delete = None
     benchmark.cmd_update(vectordb, hf_dir, add_n, delete, cfg)
-
-    inst = captured["instance"]
-    assert inst.train_calls  # vectordb trained at least once
-    assert inst.upsert_calls[0] == list(range(5))
-    assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
-    assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
 
     inst = captured["instance"]
     assert inst.train_calls  # vectordb trained at least once
@@ -373,13 +367,13 @@ def test_load_cfg_and_ensure_dir_error_and_idempotency(tmp_path):
 # ===============================
 # Additional coverage boosters
 # ===============================
-class CaptureBE(DummyVDB):
+class CaptureVectorDB(DummyVDB):
     """Used to verify init_vectordb scrubs reserved keys."""
 
 
 def test_init_vectordb_scrubs_reserved(monkeypatch):
     # Inject capture vectordb under a custom key
-    monkeypatch.setitem(benchmark.VECTORDBS, "capture", CaptureBE)
+    monkeypatch.setitem(benchmark.VECTORDBS, "capture", CaptureVectorDB)
     params = {"metric": "ip", "dim": 999, "name": "x", "nlist": 123}
     be = benchmark.init_vectordb("capture", dim=64, metric="ip", params=params)
     # Reserved keys must not be forwarded twice

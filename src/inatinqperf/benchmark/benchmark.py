@@ -49,7 +49,7 @@ class Benchmarker:
         cfg: Mapping[str, Any],
     ) -> None:
         """Download HF dataset and optionally export images."""
-        huggingface_id = cfg["dataset"]["huggingface_id"]
+        huggingface_id = cfg["dataset"]["hf_id"]
         out_dir = out_dir or Path(cfg["dataset"]["out_dir"])
         export_raw_images = export_raw_images or cfg["dataset"].get("export_images", False)
 
@@ -271,16 +271,17 @@ def cmd_update(
 
 
 def cmd_run_all(
-    size: str,
+    dataset_size: str,
     vectordb: str = "faiss.ivfpq",
     cfg: Mapping[str, Any] | None = None,
+    **kwargs,  # noqa: ARG001
 ) -> None:
     """Run end-to-end benchmark with all steps."""
     benchmarker = Benchmarker()
     benchmarker.download(
-        size=size,
+        dataset_size=dataset_size,
         out_dir=Path(cfg["dataset"]["out_dir"]),
-        export_images=False,
+        export_raw_images=False,
         cfg=cfg,
     )
 
@@ -324,11 +325,10 @@ def cmd_run_all(
 def main() -> None:
     """Entry point."""
     p = argparse.ArgumentParser(description="VectorDB-agnostic benchmark")
-    p.add_argument("--dataset-size", choices=("small", "large", "xlarge", "xxlarge"), default="small")
-
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("download", help="Download HF dataset and optionally export images")
+    sp.add_argument("--dataset-size", choices=("small", "large", "xlarge", "xxlarge"), default="small")
     sp.add_argument("--out_dir", default=None)
     sp.add_argument("--export-images", action="store_true", default=False)
 
@@ -361,6 +361,7 @@ def main() -> None:
         "run-all", help="Run small end-to-end: download -> embed -> build -> search -> update"
     )
     sp.add_argument("--vectordb", default="faiss.ivfpq")
+    sp.add_argument("--dataset-size", choices=("small", "large", "xlarge", "xxlarge"), default="small")
     sp.set_defaults(func=cmd_run_all)
 
     args = p.parse_args()

@@ -8,17 +8,7 @@ import numpy as np
 from loguru import logger
 
 from inatinqperf.adaptors.base import VectorDatabase
-
-
-class Metric(enum.Enum):
-    """Enum for metrics used to compute vector similarity.
-
-    More details about FAISS metrics can be found here: https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances
-    """
-
-    INNER_PRODUCT = 0  # maximum inner product search
-    COSINE = 1  # Cosine distance
-    L2 = 2  # Euclidean L2 distance
+from inatinqperf.adaptors.Metric import Metric
 
 
 class Faiss(VectorDatabase):

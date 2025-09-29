@@ -135,7 +135,7 @@ uv run python src/inatinqperf/benchmark/benchmark.py build --vectordb faiss.ivfp
 Profile query latency and compute Recall@K vs FAISS Flat baseline.
 
 ```bash
-uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries bench/queries.txt
+uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries benchmark/queries.txt
 ```
 
 **Outputs:**
@@ -151,7 +151,7 @@ uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivf
 Simulate real-time usage: insert (upsert) and delete vectors.
 
 ```bash
-uv python src/inatinqperf/benchmark/benchmark.py update --vectordb faiss.ivfpq --hf_dir data/emb_hf
+uv run python src/inatinqperf/benchmark/benchmark.py update --vectordb faiss.ivfpq --hf_dir data/emb_hf
 ```
 
 Configurable counts via `configs/benchmark.yaml`:

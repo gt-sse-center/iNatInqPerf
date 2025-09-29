@@ -78,7 +78,7 @@ def test_download_with_stubs(monkeypatch, tmp_path):
 
     cfg = {
         "dataset": {
-            "huggingface_id": "fake",
+            "hf_id": "fake",
             "out_dir": tmp_path,
             "size_splits": {"small": "train[:10]"},
             "export_images": True,
@@ -349,9 +349,9 @@ def test_recall_at_k_edges():
 def test_load_cfg_and_ensure_dir_error_and_idempotency(tmp_path):
     # Good path
     cfg_path = tmp_path / "benchmark.yaml"
-    cfg_path.write_text("dataset:\n  huggingface_id: fake\n")
+    cfg_path.write_text("dataset:\n  hf_id: fake\n")
     cfg = benchmark.load_cfg(cfg_path)
-    assert cfg["dataset"]["huggingface_id"] == "fake"
+    assert cfg["dataset"]["hf_id"] == "fake"
 
     # ensure_dir called twice (idempotent)
     d = tmp_path / "_x"
@@ -404,7 +404,7 @@ def test_download_no_export(monkeypatch, tmp_path):
 
     cfg = {
         "dataset": {
-            "huggingface_id": "fake",
+            "hf_id": "fake",
             "out_dir": tmp_path,
             "size_splits": {"small": "train[:10]"},
             "export_images": True,  # default True, but args turn it off

@@ -128,16 +128,28 @@ class FaissIVFPQ(Faiss):
     def train_index(self, x_train: np.ndarray) -> None:
         """Train the index with given vectors."""
         x_train = x_train.astype(np.float32, copy=False)
-        n = int(x_train.shape[0])
+        n = x_train.shape[0]
 
         # If dataset is smaller than nlist, rebuild with reduced nlist
         ivf = _unwrap_to_ivf(self.index.index)
         if ivf is not None and hasattr(ivf, "nlist"):
-            current_nlist = int(ivf.nlist)
-            effective_nlist = max(1, min(current_nlist, n))
+            current_nlist = ivf.nlist
+
+            # Since FAISS hardcodes the minimum number
+            # of clustering points to 39, we make sure
+            # to set the effective nlist accordingly.
+            effective_nlist = max(1, min(current_nlist, int(np.floor(n / 39))))
+
             if effective_nlist != current_nlist:
                 # Recreate with smaller nlist to avoid training failures
-                desc = f"OPQ{self.m},IVF{effective_nlist},PQ{self.m}x{self.nbits}"
+
+                # NOTE: OPQ always uses 2^8 centroids, as this is hardcoded in FAISS (https://github.com/facebookresearch/faiss/blob/3b14dad6d9ac48a0764e5ba01a45bca1d7d738ee/faiss/VectorTransform.cpp#L1068)
+                # Hence we check for the effective nlist against 2^8 to decide whether to use OPQ.
+                if effective_nlist < 2**8:
+                    desc = f"IVF{effective_nlist},PQ{self.m}x{self.nbits}"
+                else:
+                    desc = f"OPQ{self.m},IVF{effective_nlist},PQ{self.m}x{self.nbits}"
+
                 base = faiss.index_factory(self.dim, desc, self.metric_type)
                 self.index = faiss.IndexIDMap2(base)
                 ivf = _unwrap_to_ivf(self.index.index)

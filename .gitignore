@@ -7,3 +7,5 @@ coverage.xml
 minisign_key.pri
 post_generation_instructions.html
 .results/**
+
+data/

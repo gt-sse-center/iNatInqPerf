@@ -8,8 +8,8 @@ from inatinqperf.benchmark import benchmark
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
-# ---------- Safe dummy backend ----------
-class DummyBE:
+# ---------- Safe dummy vectordb ----------
+class DummyVDB:
     def __init__(self, dim, metric, **params):
         self.inited = True
         self.trained = False
@@ -32,7 +32,7 @@ class DummyBE:
     def search(self, Q, topk, **kwargs):
         n = Q.shape[0]
         I = np.tile(np.arange(topk), (n, 1))
-        D = np.zeros_like(I, dtype="float32")
+        D = np.zeros_like(I, dtype=np.float32)
         return D, I
 
     def stats(self):
@@ -40,18 +40,18 @@ class DummyBE:
 
 
 @pytest.fixture(autouse=True)
-def patch_backends(monkeypatch):
-    """Ensure benchmark always uses Dummy backend instead of FAISS."""
-    monkeypatch.setitem(benchmark.BACKENDS, "faiss.flat", DummyBE)
-    monkeypatch.setitem(benchmark.BACKENDS, "faiss.ivfpq", DummyBE)
+def patch_vectordbs(monkeypatch):
+    """Ensure benchmark always uses Dummy vectordb instead of FAISS."""
+    monkeypatch.setitem(benchmark.VECTORDBS, "faiss.flat", DummyVDB)
+    monkeypatch.setitem(benchmark.VECTORDBS, "faiss.ivfpq", DummyVDB)
     # If benchmark references classes directly
-    monkeypatch.setattr(benchmark, "FaissFlat", DummyBE, raising=False)
-    monkeypatch.setattr(benchmark, "FaissIVFPQ", DummyBE, raising=False)
+    monkeypatch.setattr(benchmark, "FaissFlat", DummyVDB, raising=False)
+    monkeypatch.setattr(benchmark, "FaissIVFPQ", DummyVDB, raising=False)
 
 
 # ---------- Helpers / fixtures ----------
 def _fake_ds_embeddings(n=5, d=4):
-    return {"embedding": [np.ones(d, dtype="float32") for _ in range(n)], "id": list(range(n))}
+    return {"embedding": [np.ones(d, dtype=np.float32) for _ in range(n)], "id": list(range(n))}
 
 
 # ===============================
@@ -100,9 +100,7 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
 
     def _embed_images(raw_dir, model_id, batch):
         embed_calls.append((raw_dir, model_id, batch))
-        return ImageDatasetWithEmbeddings(
-            np.asarray([]), np.ones((3, 4), dtype="float32"), [0, 1, 2], [0, 1, 2]
-        )
+        return ImageDatasetWithEmbeddings(np.ones((3, 4), dtype=np.float32), [0, 1, 2], [0, 1, 2])
 
     # Stub to_hf_dataset -> save_to_disk
     save_calls: list[str] = []
@@ -145,11 +143,11 @@ def test_cmd_embed_with_stubs(monkeypatch, tmp_path):
     assert (tmp_path / "emb.flag").exists()
 
 
-def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
+def test_cmd_build_with_dummy_vectordb(monkeypatch, tmp_path):
     # Use fake embeddings dataset on disk
     monkeypatch.setattr(benchmark, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=4, d=2))
 
-    class CaptureBackend(DummyBE):
+    class CaptureVectorDB(DummyVDB):
         def __init__(self, dim, metric, **params):
             super().__init__(dim, metric, **params)
             self.train_calls: list[int] = []
@@ -163,22 +161,22 @@ def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
             self.upsert_ids.append(list(ids))
             super().upsert(ids, X)
 
-    captured: dict[str, CaptureBackend] = {}
+    captured: dict[str, CaptureVectorDB] = {}
 
-    def _capture_backend(name, dim, metric, params):
+    def _capture_vectordb(name, dim, metric, params):
         safe = dict(params) if params else {}
         safe.pop("metric", None)
-        inst = CaptureBackend(dim=dim, metric=metric, **safe)
+        inst = CaptureVectorDB(dim=dim, metric=metric, **safe)
         captured["instance"] = inst
         return inst
 
-    monkeypatch.setattr(benchmark, "_init_backend", _capture_backend)
+    monkeypatch.setattr(benchmark, "init_vectordb", _capture_vectordb)
 
     cfg = {
         "embedding": {"out_hf_dir": str(tmp_path)},
-        "backends": {"faiss.flat": {"metric": "ip"}},
+        "vectordbs": {"faiss.flat": {"metric": "ip"}},
     }
-    backend = "faiss.flat"
+    vectordb = "faiss.flat"
     hf_dir = None
 
     logs: list[str] = []
@@ -188,7 +186,7 @@ def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
 
     sink_id = benchmark.logger.add(_sink, level="INFO")
     try:
-        benchmark.cmd_build(backend, hf_dir, cfg)
+        benchmark.cmd_build(vectordb, hf_dir, cfg)
     finally:
         benchmark.logger.remove(sink_id)
 
@@ -200,10 +198,10 @@ def test_cmd_build_with_dummy_backend(monkeypatch, tmp_path):
     # restore logger to avoid leaking stub to other tests
 
 
-def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
-    # Ensure search loads a DummyBE instead of FAISS from pickle (paranoia; may not be used)
-    monkeypatch.setattr(pickle, "load", lambda f: DummyBE())
-    monkeypatch.setattr(benchmark, "embed_text", lambda qs, mid: np.ones((len(qs), 2), dtype="float32"))
+def test_cmd_search_safe_pickle_and_vectordb(monkeypatch, tmp_path, caplog):
+    # Ensure search loads a DummyVDB instead of FAISS from pickle (paranoia; may not be used)
+    monkeypatch.setattr(pickle, "load", lambda f: DummyVDB())
+    monkeypatch.setattr(benchmark, "embed_text", lambda qs, mid: np.ones((len(qs), 2), dtype=np.float32))
     # Return a fake embeddings dataset so load_from_disk doesn't touch the filesystem
     monkeypatch.setattr(benchmark, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=3, d=2))
 
@@ -213,7 +211,7 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
             def search(self, Q, k):
                 n = Q.shape[0]
                 I = np.tile(np.arange(k), (n, 1))
-                D = np.zeros_like(I, dtype="float32")
+                D = np.zeros_like(I, dtype=np.float32)
                 return D, I
 
         return _Exact()
@@ -225,10 +223,10 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
 
     cfg = {
         "embedding": {"model_id": "m", "out_hf_dir": str(tmp_path)},
-        "backends": {"faiss.flat": {"metric": "ip"}},
+        "vectordbs": {"faiss.flat": {"metric": "ip"}},
         "search": {"topk": 3, "queries_file": str(qfile)},
     }
-    backend = "faiss.flat"
+    vectordb = "faiss.flat"
     hf_dir = None
     topk = 3
     queries = str(qfile)
@@ -240,19 +238,19 @@ def test_cmd_search_safe_pickle_and_backend(monkeypatch, tmp_path, caplog):
 
     sink_id = benchmark.logger.add(_sink, level="INFO")
     try:
-        benchmark.cmd_search(backend, hf_dir, topk, queries, cfg)
+        benchmark.cmd_search(vectordb, hf_dir, topk, queries, cfg)
     finally:
         benchmark.logger.remove(sink_id)
 
     combined = "\n".join(logs)
-    assert '"backend": "faiss.flat"' in combined
+    assert '"vectordb": "faiss.flat"' in combined
     assert '"recall@k"' in combined
 
 
-def test_cmd_update_with_dummy_backend(monkeypatch, tmp_path):
+def test_cmd_update_with_dummy_vectordb(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark, "load_from_disk", lambda path=None: _fake_ds_embeddings(n=5, d=2))
 
-    class CaptureBE(DummyBE):
+    class CaptureBE(DummyVDB):
         def __init__(self, dim, metric, **params):
             super().__init__(dim, metric, **params)
             self.train_calls: list[int] = []
@@ -273,34 +271,34 @@ def test_cmd_update_with_dummy_backend(monkeypatch, tmp_path):
 
     captured: dict[str, CaptureBE] = {}
 
-    def _capture_backend(name, dim, metric, params):
+    def _capture_vectordb(name, dim, metric, params):
         safe = dict(params) if params else {}
         safe.pop("metric", None)
         inst = CaptureBE(dim=dim, metric=metric, **safe)
         captured["instance"] = inst
         return inst
 
-    monkeypatch.setattr(benchmark, "_init_backend", _capture_backend)
+    monkeypatch.setattr(benchmark, "init_vectordb", _capture_vectordb)
 
     cfg = {
         "embedding": {"out_hf_dir": str(tmp_path), "model_id": "m"},
-        "backends": {"faiss.flat": {"metric": "ip"}},
+        "vectordbs": {"faiss.flat": {"metric": "ip"}},
         "update": {"add_count": 2, "delete_count": 2},
     }
-    backend = "faiss.flat"
+    vectordb = "faiss.flat"
     hf_dir = None
     add_n = None
     delete = None
-    benchmark.cmd_update(backend, hf_dir, add_n, delete, cfg)
+    benchmark.cmd_update(vectordb, hf_dir, add_n, delete, cfg)
 
     inst = captured["instance"]
-    assert inst.train_calls  # backend trained at least once
+    assert inst.train_calls  # vectordb trained at least once
     assert inst.upsert_calls[0] == list(range(5))
     assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
     assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
 
     inst = captured["instance"]
-    assert inst.train_calls  # backend trained at least once
+    assert inst.train_calls  # vectordb trained at least once
     assert inst.upsert_calls[0] == list(range(5))
     assert len(inst.upsert_calls[1]) == cfg["update"]["add_count"]
     assert inst.delete_calls == [list(range(10_000_000, 10_000_000 + cfg["update"]["delete_count"]))]
@@ -319,11 +317,11 @@ def test_cli_main_dispatch(monkeypatch, tmp_path, verb):
     if verb == "download":
         argv = ["prog", verb, "--size", "small"]
     elif verb == "build":
-        argv = ["prog", verb, "--backend", "faiss.flat"]
+        argv = ["prog", verb, "--vectordb", "faiss.flat"]
     elif verb == "search":
-        argv = ["prog", verb, "--backend", "faiss.flat", "--topk", "2"]
+        argv = ["prog", verb, "--vectordb", "faiss.flat", "--topk", "2"]
     elif verb == "update":
-        argv = ["prog", verb, "--backend", "faiss.flat"]
+        argv = ["prog", verb, "--vectordb", "faiss.flat"]
     else:
         argv = ["prog", verb]
     monkeypatch.setattr(sys, "argv", argv)
@@ -366,17 +364,15 @@ def test_load_cfg_and_ensure_dir_error_and_idempotency(tmp_path):
 # ===============================
 # Additional coverage boosters
 # ===============================
-class CaptureBE(DummyBE):
-    """Used to verify _init_backend scrubs reserved keys."""
-
-    pass
+class CaptureBE(DummyVDB):
+    """Used to verify init_vectordb scrubs reserved keys."""
 
 
-def test_init_backend_scrubs_reserved(monkeypatch):
-    # Inject capture backend under a custom key
-    monkeypatch.setitem(benchmark.BACKENDS, "capture", CaptureBE)
+def test_init_vectordb_scrubs_reserved(monkeypatch):
+    # Inject capture vectordb under a custom key
+    monkeypatch.setitem(benchmark.VECTORDBS, "capture", CaptureBE)
     params = {"metric": "ip", "dim": 999, "name": "x", "nlist": 123}
-    be = benchmark._init_backend("capture", dim=64, metric="ip", params=params)
+    be = benchmark.init_vectordb("capture", dim=64, metric="ip", params=params)
     # Reserved keys must not be forwarded twice
     assert be.init_args["dim"] == 64
     assert be.init_args["metric"] == "ip"
@@ -422,7 +418,7 @@ def test_cmd_embed_with_overrides(monkeypatch, tmp_path):
 
     def _embed_images(raw_dir, model_id, batch):
         embed_calls.append((raw_dir, model_id, batch))
-        return ImageDatasetWithEmbeddings(np.asarray([]), np.ones((2, 3), dtype="float32"), [10, 11], [0, 1])
+        return ImageDatasetWithEmbeddings(np.ones((2, 3), dtype=np.float32), [10, 11], [0, 1])
 
     save_calls: list[str] = []
 
@@ -463,7 +459,7 @@ class LazyEmbeds:
 
     def __getitem__(self, i):
         # Return a tiny array on demand, avoiding storing 500k items
-        return np.ones(self.d, dtype="float32")
+        return np.ones(self.d, dtype=np.float32)
 
 
 class LazyIds:
@@ -482,7 +478,7 @@ def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
     monkeypatch.setattr(benchmark, "cmd_download", lambda **kwargs: calls.append("download"))
     monkeypatch.setattr(benchmark, "cmd_embed", lambda **kwargs: calls.append("embed"))
     monkeypatch.setattr(
-        benchmark, "cmd_build", lambda **kwargs: calls.append(f"build:{kwargs.get('backend', None)}")
+        benchmark, "cmd_build", lambda **kwargs: calls.append(f"build:{kwargs.get('vectordb', None)}")
     )
     monkeypatch.setattr(benchmark, "cmd_search", lambda **kwargs: calls.append("search"))
     monkeypatch.setattr(benchmark, "cmd_update", lambda **kwargs: calls.append("update"))
@@ -493,8 +489,8 @@ def test_cmd_run_all_calls_sequence(monkeypatch, tmp_path):
         "search": {"queries_file": str(tmp_path / "q.txt")},
     }
     size = "small"
-    backend = "faiss.flat"
-    benchmark.cmd_run_all(size, backend, cfg)
+    vectordb = "faiss.flat"
+    benchmark.cmd_run_all(size, vectordb, cfg)
 
     # Expected call order: download, embed, build (baseline), build (chosen), search, update
     assert calls[0] == "download"

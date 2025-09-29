@@ -14,7 +14,7 @@ embedding:
   out_dir: "data/emb"
   out_hf_dir: "data/emb_hf"
 
-backends:
+vectordbs:
   faiss.flat:
     metric: ip
   faiss.ivfpq:

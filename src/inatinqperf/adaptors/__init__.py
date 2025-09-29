@@ -1,8 +1,8 @@
 """__init__.py for adaptors."""
 
-from inatinqperf.adaptors.faiss_backend import FaissFlat, FaissIVFPQ
+from inatinqperf.adaptors.faiss_adaptor import FaissFlat, FaissIVFPQ
 
-BACKENDS = {
+VECTORDBS = {
     "faiss.flat": FaissFlat,
     "faiss.ivfpq": FaissIVFPQ,
 }

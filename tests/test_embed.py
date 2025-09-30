@@ -87,7 +87,7 @@ def test_embed_images_empty_dataset(monkeypatch):
 
     assert X.shape[0] == 0
     assert ids == []
-    assert labels == []
+    assert labels.tolist() == []
 
 
 def test_embed_images_model_error(monkeypatch):
@@ -110,14 +110,14 @@ def test_embed_images_model_error(monkeypatch):
 def test_to_hf_dataset_structure():
     X = np.ones((3, 4))
     ids = [1, 2, 3]
-    labels = ["a", "b", "c"]
+    labels = np.asarray(["a", "b", "c"])
     dse = embed.ImageDatasetWithEmbeddings(X, ids, labels)
 
-    ds = embed.to_hf_dataset(dse)
-    assert set(ds.column_names) == {"id", "label", "embedding"}
-    assert isinstance(ds[0]["embedding"], list)
-    assert ds[0]["id"] == 1
-    assert ds[0]["label"] == "a"
+    ds = embed.to_huggingface_dataset(dse)
+    assert set(ds.column_names) == {"ids", "labels", "embeddings"}
+    assert isinstance(ds[0]["embeddings"], list)
+    assert ds[0]["ids"] == 1
+    assert ds[0]["labels"] == "a"
 
 
 def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
@@ -144,13 +144,13 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
 
     assert X.shape[0] == 4
     assert all(isinstance(i, int) for i in ids)
-    assert labels == [0, 1, 2, 3]
+    assert labels.tolist() == [0, 1, 2, 3]
 
     # Convert to HF dataset structure
-    hf_ds = embed.to_hf_dataset(dataset_with_embeddings)
-    assert set(hf_ds.column_names) == {"id", "label", "embedding"}
+    hf_ds = embed.to_huggingface_dataset(dataset_with_embeddings)
+    assert set(hf_ds.column_names) == {"ids", "labels", "embeddings"}
     assert len(hf_ds) == 4
-    assert isinstance(hf_ds[0]["embedding"], list)
+    assert isinstance(hf_ds[0]["embeddings"], list)
 
 
 def test_embed_text(monkeypatch):

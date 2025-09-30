@@ -10,7 +10,7 @@ from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 # ---------- Helpers / fixtures ----------
 def _fake_ds_embeddings(n=5, d=4):
-    return {"embedding": [np.ones(d, dtype=np.float32) for _ in range(n)], "id": list(range(n))}
+    return {"embeddings": [np.ones(d, dtype=np.float32) for _ in range(n)], "ids": list(range(n))}
 
 
 class DummyVectorDB:
@@ -82,14 +82,45 @@ def test_download_no_export(tmp_path, config_yaml):
     assert not (tmp_path / benchmarker.cfg.dataset.directory / "images").exists()
 
 
+def test_download_preexisting(tmp_path, config_yaml, caplog):
+    """Test dataset download if the dataset directory already exists."""
+    benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
+    benchmarker.cfg.dataset.export_images = False
+
+    # Create the dataset directory
+    (tmp_path / benchmarker.cfg.dataset.directory).mkdir(parents=True, exist_ok=True)
+
+    benchmarker.download()
+
+    assert "Dataset already exists, continuing..." in caplog.text
+
+
 def test_embed(monkeypatch, config_yaml, tmp_path):
     benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
     benchmarker.download()
     ds = benchmarker.embed()
 
-    assert ds.embeddings.shape == (200, 512)
-    assert len(ds.ids) == 200
-    assert len(ds.labels) == 200
+    ds = ds.with_format("numpy")
+
+    assert ds["embeddings"].shape == (200, 512)
+    assert len(ds["ids"]) == 200
+    assert len(ds["labels"]) == 200
+
+
+def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
+    """Test dataset download if the dataset directory already exists."""
+    benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
+
+    # Create the embedding directory
+    (tmp_path / benchmarker.cfg.embedding.directory).mkdir(parents=True, exist_ok=True)
+
+    from datasets import Dataset
+
+    monkeypatch.setattr(Dataset, "load_from_disk", lambda *args, **kwargs: None)
+
+    benchmarker.embed()
+
+    assert "Embeddings found, loading instead of computing" in caplog.text
 
 
 def test_save_as_huggingface_dataset(config_yaml, tmp_path):

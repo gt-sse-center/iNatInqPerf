@@ -16,7 +16,12 @@ from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import VectorDatabase
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
-from inatinqperf.utils.embed import ImageDatasetWithEmbeddings, embed_images, embed_text, to_hf_dataset
+from inatinqperf.utils.embed import (
+    ImageDatasetWithEmbeddings,
+    embed_images,
+    embed_text,
+    to_huggingface_dataset,
+)
 from inatinqperf.utils.profiler import Profiler
 
 
@@ -82,14 +87,17 @@ class Benchmarker:
     def save_as_huggingface_dataset(
         self,
         dse: ImageDatasetWithEmbeddings,
-        embeddings_dir: Path,
+        embeddings_dir: Path | None = None,
     ) -> Dataset:
         """Convert to HuggingFace dataset format and save to `embeddings_dir`."""
+
+        if embeddings_dir is None:
+            embeddings_dir = self.base_path / self.cfg.embedding.directory
 
         ensure_dir(embeddings_dir)
 
         logger.info(f"Saving dataset to {embeddings_dir}")
-        huggingface_dataset: Dataset = to_hf_dataset(dse)
+        huggingface_dataset: Dataset = to_huggingface_dataset(dse)
         huggingface_dataset.save_to_disk(embeddings_dir)
 
         logger.info(f"Embeddings: {dse.embeddings.shape} -> {embeddings_dir}")
@@ -105,8 +113,8 @@ class Benchmarker:
         """Build index for the specified vectordb."""
         vdb_type = self.cfg.vectordb.type
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
-        ids = np.array(dataset["id"], dtype=np.int64)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        ids = np.array(dataset["ids"], dtype=np.int64)
 
         logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
@@ -123,7 +131,7 @@ class Benchmarker:
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
         metric = self.cfg.vectordb.params.metric.lower()
 
         # Create exact baseline
@@ -142,7 +150,7 @@ class Benchmarker:
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
 
         topk = self.cfg.search.topk
         queries_file = Path(__file__).resolve().parent.parent / self.cfg.search.queries_file
@@ -187,7 +195,7 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)

@@ -104,10 +104,10 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
                 dim = int(getattr(config, "projection_dim", 0) or getattr(config, "hidden_size", 0))
         x = np.empty((0, max(dim, 0)), dtype=np.float32)
 
-    return ImageDatasetWithEmbeddings(x, ids, labels)
+    return ImageDatasetWithEmbeddings(x, ids, np.asarray(labels))
 
 
-def to_hf_dataset(
+def to_huggingface_dataset(
     dataset: ImageDatasetWithEmbeddings,
 ) -> Dataset:
     """Convert embeddings and metadata to a HuggingFace dataset."""
@@ -117,25 +117,28 @@ def to_hf_dataset(
         else 0
     )
 
+    # Convert to np array
+    dataset.labels = np.asarray(dataset.labels)
+
     try:
-        label_values = [int(y) for y in dataset.labels]
+        label_values = dataset.labels.astype(np.int32)
         label_feature = Value("int32")
     except (TypeError, ValueError):
-        label_values = [str(y) for y in dataset.labels]
+        label_values = dataset.labels.astype(str)
         label_feature = Value("string")
 
     feats = Features(
         {
-            "id": Value("int64"),
-            "label": label_feature,
-            "embedding": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
+            "ids": Value("int64"),
+            "labels": label_feature,
+            "embeddings": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
         },
     )
     return Dataset.from_dict(
         {
-            "id": [int(i) for i in dataset.ids],
-            "label": label_values,
-            "embedding": [d.tolist() for d in dataset.embeddings],
+            "ids": dataset.ids,
+            "labels": label_values,
+            "embeddings": dataset.embeddings,
         },
         features=feats,
     )

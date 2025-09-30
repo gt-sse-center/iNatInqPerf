@@ -1,15 +1,17 @@
 """Modules with classes for loading configurations with Pydantic validation."""
 
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, PositiveInt
+from pydantic import BaseModel, PositiveInt, StringConstraints
+
+NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 
 
 class DatasetConfig(BaseModel):
     """Dataset definition within the main configuration."""
 
-    dataset_id: str
+    dataset_id: NonEmptyStr
     # For multiple splits, HuggingFace accepts a single string with splits concatenated with the `+` symbol.
     splits: str
     directory: Path
@@ -19,7 +21,7 @@ class DatasetConfig(BaseModel):
 class EmbeddingParams(BaseModel):
     """Configuration for the embedding model."""
 
-    model_id: str
+    model_id: NonEmptyStr
     batch_size: PositiveInt
     directory: Path
 
@@ -27,7 +29,7 @@ class EmbeddingParams(BaseModel):
 class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
-    metric: str
+    metric: NonEmptyStr
     nlist: int | None = None
     m: int | None = None
     nbits: int | None = None
@@ -41,7 +43,7 @@ class VectorDatabaseParams(BaseModel):
 class VectorDatabaseConfig(BaseModel):
     """Configuration for Vector Database."""
 
-    type: str
+    type: NonEmptyStr
     params: VectorDatabaseParams
 
 

@@ -1,10 +1,35 @@
 """Pytest configuration for shared test setup."""
 
 import os
+import shutil
 import sys
-from loguru import logger
-import tqdm
+from pathlib import Path
+
 import pytest
+import tqdm
+import yaml
+from datasets import load_dataset
+from loguru import logger
+
+
+@pytest.fixture(name="source_dir")
+def source_dir_fixture():
+    """A fixture for the source directory."""
+    # Add the source directory to the fake filesystem so everything can download correctly.
+    source_dir = Path(__file__).parent.parent
+    return source_dir
+
+
+@pytest.fixture(name="config_yaml")
+def config_yaml_fixture(source_dir):
+    """The config as a yaml file within a fake source directory."""
+    fixtures_dir = source_dir / "tests" / "fixtures"
+    config_file = fixtures_dir / "inquire_benchmark_small.yaml"
+
+    return config_file
+
+
+pytest_plugins = ["fixtures.conftest"]
 
 # Set logging level to ERROR so it doesn't show
 # in test output but is still captured for testing.

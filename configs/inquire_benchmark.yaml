@@ -1,0 +1,27 @@
+dataset:
+  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
+  splits: "validation+test"
+  directory: data/inquire_benchmark/raw
+  export_images: true
+
+embedding:
+  model_id: openai/clip-vit-base-patch32
+  batch_size: 64
+  directory: data/inquire_benchmark/emb
+
+vectordb:
+  type: faiss.ivfpq
+  params:
+    metric: ip
+    nlist: 32768
+    m: 64
+    nbits: 8
+    nprobe: 32
+
+search:
+  topk: 10
+  queries_file: benchmark/queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30

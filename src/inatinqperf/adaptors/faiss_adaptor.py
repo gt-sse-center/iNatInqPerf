@@ -1,6 +1,5 @@
 """FAISS vector database adaptor."""
 
-import enum
 from collections.abc import Sequence
 
 import faiss
@@ -8,7 +7,6 @@ import numpy as np
 from loguru import logger
 
 from inatinqperf.adaptors.base import VectorDatabase
-from inatinqperf.adaptors.Metric import Metric
 
 
 class Faiss(VectorDatabase):

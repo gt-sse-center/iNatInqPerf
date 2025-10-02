@@ -45,38 +45,19 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv .venv && source .venv/bin/activate
 uv sync
 
-# Run a small end-to-end benchmark (FAISS IVF+PQ vectordb)
-uv run python src/inatinqperf/benchmark/benchmark.py run-all --dataset-size small --vectordb faiss.ivfpq
+# Run an end-to-end benchmark (FAISS IVF+PQ vectordb) on the INQUIRE dataset.
+uv run python srcripts/run_benchmark.py configs/inquire_benchmark.yaml
 ```
 
----
+The benchmarking code will
 
-## Step 1: Download Dataset
+1. Download the specified dataset from the HuggingFace website.
+2. Embed the images using a CLIP model.
+3. Build a vector database index.
+4. Perform a search for given queries to obtain query latency, and compute Recall@K vs FAISS Flat baseline..
+5. Update the index.
 
-Fetch a dataset from Hugging Face, slice by size, and optionally export JPEGs with a manifest.
-
-```bash
-# Small slice (200 samples, exports JPEGs)
-uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size small --out_dir data/raw --export-images
-
-# Large (full train split only)
-uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size large --out_dir data/raw
-
-# XL (train+val+test)
-uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size xlarge --out_dir data/raw
-
-# XXL (all data)
-uv run python src/inatinqperf/benchmark/benchmark.py download --dataset-size xxlarge --out_dir data/raw
-```
-
-### Options
-
-- `--dataset-size` : `small`, `large`, `xlarge`, `xxlarge`
-- `--out_dir` : output folder (default: `data/raw`)
-- `--export-images` : save JPEGs + `manifest.csv`
-- `--no-export-images` : keep HF Arrow dataset only
-
-**Output structure:**
+### Dataset Output Structure
 
 ```sh
 data/raw/
@@ -90,79 +71,16 @@ data/raw/
   images/manifest.csv   # [index,filename,label]
 ```
 
----
-
-## Step 2: Embed Images
-
-Generate CLIP embeddings and save them into a Hugging Face dataset.
-
-```bash
-# Default model + batch size
-uv run python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir data/emb
-
-# Override CLIP model & batch size
-uv run python src/inatinqperf/benchmark/benchmark.py embed --raw_dir data/raw --emb_dir data/emb --model_id openai/clip-vit-large-patch14 --batch-size 32
-```
-
-**Outputs:**
-
-- `data/emb/` — temporary embeddings
-- `data/emb_hf/` — HF dataset with `{id, label, embedding}`
-
----
-
-## Step 3: Build Index
-
-Construct an index on a chosen vectordb.
-
-```bash
-# FAISS Flat (exact baseline)
-uv run python src/inatinqperf/benchmark/benchmark.py build --vectordb faiss.flat --hf_dir data/emb_hf
-
-# FAISS IVF+PQ (ANN)
-uv run python src/inatinqperf/benchmark/benchmark.py build --vectordb faiss.ivfpq --hf_dir data/emb_hf
-```
-
 ### Supported Vector Databases
 
 - `faiss.flat` (exact)
 - `faiss.ivfpq` (IVF + OPQ + PQ)
 
----
-
-## Step 4: Search Profiling
-
-Profile query latency and compute Recall@K vs FAISS Flat baseline.
-
-```bash
-uv run python src/inatinqperf/benchmark/benchmark.py search --vectordb faiss.ivfpq --hf_dir data/emb_hf --topk 10 --queries benchmark/queries.txt
-```
-
-**Outputs:**
+### Profiling Outputs
 
 - Latency statistics (avg, p50, p95)
 - Recall@K vs baseline
 - JSON metrics in `.results/`
-
----
-
-## Step 5: Index Update
-
-Simulate real-time usage: insert (upsert) and delete vectors.
-
-```bash
-uv run python src/inatinqperf/benchmark/benchmark.py update --vectordb faiss.ivfpq --hf_dir data/emb_hf
-```
-
-Configurable counts via `configs/benchmark.yaml`:
-
-```yaml
-update:
-  add_count: 50
-  delete_count: 30
-```
-
----
 
 ## Profiling with py-spy
 

@@ -73,7 +73,7 @@ class Profiler:
         }
 
         ts = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
-        path = Path(self.results_dir) / f"step-{self.step}-{ts}.json"
+        path = self.results_dir / f"step-{self.step}-{ts}.json"
 
         with path.open("w", encoding="utf-8") as f:
             json.dump(self.metrics, f, indent=2)

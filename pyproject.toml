@@ -29,6 +29,8 @@ dependencies = [
     "pyyaml>=6.0",
     "codetiming>=1.4",
     "requests>=2.31",
+    "pydantic>=2.11.9",
+    "typer>=0.17.4",
 ]
 
 classifiers = [

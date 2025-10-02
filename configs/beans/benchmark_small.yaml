@@ -1,0 +1,28 @@
+dataset:
+  dataset_id: beans
+  splits: "train[:200]"
+  directory: "data/beans/small/raw"
+  export_images: true
+
+embedding:
+  model_id: "openai/clip-vit-base-patch32"
+  batch_size: 32
+  directory: "data/beans/small/emb"
+
+vectordbs:
+  faiss.flat:
+    metric: ip
+  faiss.ivfpq:
+    metric: ip
+    nlist: 32768
+    m: 64
+    nbits: 2  # 8
+    nprobe: 32
+
+search:
+  topk: 10
+  queries_file: "benchmark/queries.txt"
+
+update:
+  add_count: 50
+  delete_count: 30

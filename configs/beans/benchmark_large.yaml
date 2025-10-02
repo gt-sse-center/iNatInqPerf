@@ -1,18 +1,13 @@
 dataset:
-  hf_id: beans
-  size_splits:
-    small: ["train[:200]"]
-    large: ["train"]
-    xlarge: ["train", "validation", "test"]
-    xxlarge: ["train", "validation", "test"]
-  out_dir: "data/raw"
+  dataset_id: beans
+  splits: "train"
+  directory: "data/beans/large/raw"
   export_images: true
 
 embedding:
   model_id: "openai/clip-vit-base-patch32"
-  batch: 16
-  out_dir: "data/emb"
-  out_hf_dir: "data/emb_hf"
+  batch_size: 16
+  directory: "data/beans/large/emb"
 
 vectordbs:
   faiss.flat:
@@ -21,7 +16,7 @@ vectordbs:
     metric: ip
     nlist: 32768
     m: 64
-    nbits: 2  # 8
+    nbits: 2 # 8
     nprobe: 32
 
 search:

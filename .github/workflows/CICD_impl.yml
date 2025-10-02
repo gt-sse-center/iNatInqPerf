@@ -236,7 +236,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     permissions:
-      contents: write  # To tag the repository and create the release
+      contents: write # To tag the repository and create the release
 
     steps:
       - uses: actions/checkout@v4

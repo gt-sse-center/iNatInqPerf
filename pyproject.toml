@@ -31,6 +31,7 @@ dependencies = [
     "requests>=2.31",
     "pydantic>=2.11.9",
     "typer>=0.17.4",
+    "qdrant-client>=1.12.1",
 ]
 
 classifiers = [
@@ -63,10 +64,14 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-loguru>=0.4.0",
     "ruff>=0.13.0",
+    "docker>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
 addopts = "--verbose -vv --capture=no --cov=inatinqperf --cov-report html --cov-report term --cov-report xml:coverage.xml --cov-fail-under=95.0"
+norecursedirs = [
+    "tests/vectordbs",
+]
 
 [tool.scripts]
 download = "python src/benchmark/benchmark.py download"

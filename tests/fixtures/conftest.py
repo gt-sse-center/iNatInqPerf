@@ -1,8 +1,9 @@
 """conftest file for test data fixtures."""
 
 from pathlib import Path
-import yaml
+
 import pytest
+import yaml
 
 
 @pytest.fixture(name="benchmark_yaml")

@@ -114,10 +114,10 @@ def test_to_hf_dataset_structure():
     dse = embed.ImageDatasetWithEmbeddings(X, ids, labels)
 
     ds = embed.to_huggingface_dataset(dse)
-    assert set(ds.column_names) == {"ids", "labels", "embeddings"}
-    assert isinstance(ds[0]["embeddings"], list)
-    assert ds[0]["ids"] == 1
-    assert ds[0]["labels"] == "a"
+    assert set(ds.column_names) == {"id", "label", "embedding"}
+    assert isinstance(ds[0]["embedding"], list)
+    assert ds[0]["id"] == 1
+    assert ds[0]["label"] == "a"
 
 
 def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
@@ -148,9 +148,9 @@ def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
 
     # Convert to HF dataset structure
     hf_ds = embed.to_huggingface_dataset(dataset_with_embeddings)
-    assert set(hf_ds.column_names) == {"ids", "labels", "embeddings"}
+    assert set(hf_ds.column_names) == {"id", "label", "embedding"}
     assert len(hf_ds) == 4
-    assert isinstance(hf_ds[0]["embeddings"], list)
+    assert isinstance(hf_ds[0]["embedding"], list)
 
 
 def test_embed_text(monkeypatch):

@@ -29,6 +29,13 @@ class Benchmarker:
     """Class to encapsulate all benchmarking operations."""
 
     def __init__(self, config_file: Path, base_path: Path | None = None) -> None:
+        """Construct the benchmark orchestrator.
+
+        Args:
+            config_file (Path): Path to the config file with the parameters required to run the benchmark.
+            base_path (Path | None, optional): The path to which all data will be saved.
+                If None, it will be set to the root directory of the project.
+        """
         logger.info(f"Loading config: {config_file}")
         with config_file.open("r") as f:
             cfg = yaml.safe_load(f)
@@ -113,8 +120,8 @@ class Benchmarker:
         """Build index for the specified vectordb."""
         vdb_type = self.cfg.vectordb.type
 
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
-        ids = np.array(dataset["ids"], dtype=np.int64)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
+        ids = np.array(dataset["id"], dtype=np.int64)
 
         logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
@@ -131,7 +138,7 @@ class Benchmarker:
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
         metric = self.cfg.vectordb.params.metric.lower()
 
         # Create exact baseline
@@ -150,7 +157,7 @@ class Benchmarker:
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
 
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
 
         topk = self.cfg.search.topk
         queries_file = Path(__file__).resolve().parent.parent / self.cfg.search.queries_file
@@ -195,7 +202,7 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)

@@ -15,7 +15,7 @@ vectordb:
     metric: ip
     nlist: 32768
     m: 64
-    nbits: 8
+    nbits: 2
     nprobe: 32
 
 search:

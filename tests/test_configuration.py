@@ -1,12 +1,13 @@
+from pathlib import Path
+
 from inatinqperf.benchmark.configuration import (
-    DatasetConfig,
     Config,
+    DatasetConfig,
     EmbeddingParams,
     SearchParams,
     VectorDatabaseConfig,
     VectorDatabaseParams,
 )
-from pathlib import Path
 
 
 def test_dataset_config(benchmark_yaml):
@@ -29,7 +30,7 @@ def test_vectordatabase_params(benchmark_yaml):
     assert params.metric == "ip"
     assert params.nlist == 32768
     assert params.m == 64
-    assert params.nbits == 8
+    assert params.nbits == 2
     assert params.nprobe == 32
 
 

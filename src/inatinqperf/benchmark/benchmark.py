@@ -160,9 +160,16 @@ class Benchmarker:
         x = np.stack(dataset["embedding"]).astype(np.float32)
 
         topk = self.cfg.search.topk
-        queries_file = Path(__file__).resolve().parent.parent / self.cfg.search.queries_file
 
-        queries = [q.strip() for q in queries_file.read_text(encoding="utf-8").splitlines() if q.strip()]
+        dataset_dir = self.base_path / self.cfg.dataset.directory
+        ds = Dataset.load_from_disk(dataset_dir)
+        if "query" in ds.column_names:
+            queries = ds["query"]
+
+        else:
+            queries_file = Path(__file__).resolve().parent.parent / self.cfg.search.queries_file
+            queries = [q.strip() for q in queries_file.read_text(encoding="utf-8").splitlines() if q.strip()]
+
         q = embed_text(queries, model_id)
         logger.info("Embedded all queries")
 

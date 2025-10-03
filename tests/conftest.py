@@ -1,14 +1,11 @@
 """Pytest configuration for shared test setup."""
 
 import os
-import shutil
 import sys
 from pathlib import Path
 
 import pytest
 import tqdm
-import yaml
-from datasets import load_dataset
 from loguru import logger
 
 
@@ -31,10 +28,10 @@ def config_yaml_fixture(source_dir):
 
 pytest_plugins = ["fixtures.conftest"]
 
-# Set logging level to ERROR so it doesn't show
+# Set logging level to CRITICAL so it doesn't show
 # in test output but is still captured for testing.
 logger.remove()
-logger.add(sys.stderr, level="ERROR")
+logger.add(sys.stderr, level="CRITICAL")
 
 
 @pytest.fixture(autouse=True)

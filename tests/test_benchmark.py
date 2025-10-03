@@ -1,16 +1,25 @@
-# tests/test_benchmark.py
-import sys
-import pickle
+"""Tests for the benchmarking code."""
+
 import numpy as np
 import pytest
+from datasets import Dataset
 
-from inatinqperf.benchmark import benchmark, Benchmarker
+from inatinqperf.benchmark import Benchmarker, benchmark
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
+
+
+@pytest.fixture(name="data_path", scope="session")
+def data_path_fixture(tmp_path_factory):
+    """Fixture to return a temporary data path which can be used for all tests within a session.
+
+    The common path will ensure the HuggingFace dataset isn't repeatedly downloaded.
+    """
+    return tmp_path_factory.mktemp("data")
 
 
 # ---------- Helpers / fixtures ----------
 def _fake_ds_embeddings(n=5, d=4):
-    return {"embeddings": [np.ones(d, dtype=np.float32) for _ in range(n)], "ids": list(range(n))}
+    return {"embedding": [np.ones(d, dtype=np.float32) for _ in range(n)], "id": list(range(n))}
 
 
 class DummyVectorDB:
@@ -53,6 +62,8 @@ def _capture_vectordb(name, dim, init_params):
 
 
 class MockExactBaseline:
+    """A mock of an exact baseline index such as FAISS Flat."""
+
     def search(self, Q, k):
         n = Q.shape[0]
         I = np.tile(np.arange(k), (n, 1))
@@ -60,14 +71,20 @@ class MockExactBaseline:
         return D, I
 
 
-# ===============================
-# Original orchestration-safe tests
-# ===============================
-def test_download(config_yaml, tmp_path):
-    benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
+def test_load_cfg(config_yaml, data_path):
+    benchmarker = Benchmarker(config_yaml, base_path=data_path)
+    assert benchmarker.cfg.dataset.dataset_id == "sagecontinuum/INQUIRE-Benchmark-small"
+
+    # Bad path: missing file raises (FileNotFoundError or OSError depending on impl)
+    with pytest.raises((FileNotFoundError, OSError, IOError)):
+        Benchmarker(data_path / "nope.yaml", base_path=data_path)
+
+
+def test_download(config_yaml, data_path):
+    benchmarker = Benchmarker(config_yaml, base_path=data_path)
     benchmarker.download()
 
-    export_dir = tmp_path / benchmarker.cfg.dataset.directory / "images"
+    export_dir = data_path / benchmarker.cfg.dataset.directory / "images"
     assert export_dir.exists()
     assert (export_dir / "manifest.csv").exists()
 
@@ -95,16 +112,16 @@ def test_download_preexisting(tmp_path, config_yaml, caplog):
     assert "Dataset already exists, continuing..." in caplog.text
 
 
-def test_embed(monkeypatch, config_yaml, tmp_path):
-    benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
+def test_embed(config_yaml, data_path):
+    benchmarker = Benchmarker(config_yaml, base_path=data_path)
     benchmarker.download()
     ds = benchmarker.embed()
 
     ds = ds.with_format("numpy")
 
-    assert ds["embeddings"].shape == (200, 512)
-    assert len(ds["ids"]) == 200
-    assert len(ds["labels"]) == 200
+    assert ds["embedding"].shape == (200, 512)
+    assert len(ds["id"]) == 200
+    assert len(ds["label"]) == 200
 
 
 def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
@@ -113,8 +130,6 @@ def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
 
     # Create the embedding directory
     (tmp_path / benchmarker.cfg.embedding.directory).mkdir(parents=True, exist_ok=True)
-
-    from datasets import Dataset
 
     monkeypatch.setattr(Dataset, "load_from_disk", lambda *args, **kwargs: None)
 
@@ -138,14 +153,26 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
     assert (embedding_dir / "dataset_info.json").exists()
 
 
-def test_build_with_dummy_vectordb(monkeypatch, tmp_path, caplog, config_yaml):
+def test_init_vectordb(config_yaml):
+    params = {"metric": "ip", "nlist": 123, "m": 16}
+
+    benchmarker = Benchmarker(config_yaml)
+    vdb = benchmarker.init_vectordb("faiss.ivfpq", dim=64, init_params=params)
+
+    assert vdb.dim == 64
+    assert vdb.metric == "ip"
+    assert vdb.nlist == 123
+    assert vdb.m == 16
+
+
+def test_build_with_dummy_vectordb(monkeypatch, data_path, caplog, config_yaml):
     # Use fake embeddings dataset on disk
     monkeypatch.setattr(
         benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=4, d=2)
     )
-    dataset = benchmark.load_huggingface_dataset(tmp_path)
+    dataset = benchmark.load_huggingface_dataset(data_path)
 
-    benchmarker = Benchmarker(config_yaml, tmp_path)
+    benchmarker = Benchmarker(config_yaml, data_path)
     monkeypatch.setattr(benchmarker, "init_vectordb", _capture_vectordb)
 
     vdb = benchmarker.build(dataset)
@@ -155,26 +182,13 @@ def test_build_with_dummy_vectordb(monkeypatch, tmp_path, caplog, config_yaml):
     assert "Stats:" in caplog.text
 
 
-def test_search_safe_pickle_and_vectordb(monkeypatch, tmp_path, caplog, config_yaml):
-    # Ensure search loads a DummyVDB instead of FAISS from pickle
-    monkeypatch.setattr(
-        pickle,
-        "load",
-        lambda f: DummyVectorDB(dim=512, metric="ip", params={"metric": "ip", "nlist": 123, "m": 16}),
-    )
-    monkeypatch.setattr(benchmark, "embed_text", lambda qs, mid: np.ones((len(qs), 2), dtype=np.float32))
-    # Return a fake embeddings dataset so load_huggingface_dataset doesn't touch the filesystem
-    monkeypatch.setattr(
-        benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=3, d=2)
-    )
+def test_search(config_yaml, data_path, caplog):
+    """Test vector DB search."""
+    benchmarker = Benchmarker(config_yaml, base_path=data_path)
 
-    qfile = tmp_path / "queries.txt"
-    qfile.write_text("a\nb\n")
+    benchmarker.download()
 
-    dataset = benchmark.load_huggingface_dataset(tmp_path)
-
-    benchmarker = Benchmarker(config_yaml)
-    monkeypatch.setattr(benchmarker, "init_vectordb", _capture_vectordb)
+    dataset = benchmarker.embed()
     vectordb = benchmarker.build(dataset)
 
     benchmarker.search(dataset, vectordb, MockExactBaseline())
@@ -183,14 +197,14 @@ def test_search_safe_pickle_and_vectordb(monkeypatch, tmp_path, caplog, config_y
     assert '"recall@k"' in caplog.text
 
 
-def test_update_with_dummy_vectordb(monkeypatch, tmp_path, config_yaml):
+def test_update_with_dummy_vectordb(monkeypatch, data_path, config_yaml):
     monkeypatch.setattr(
         benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=5, d=2)
     )
 
-    dataset = benchmark.load_huggingface_dataset(tmp_path)
+    dataset = benchmark.load_huggingface_dataset(data_path)
 
-    benchmarker = Benchmarker(config_yaml, tmp_path)
+    benchmarker = Benchmarker(config_yaml, data_path)
     monkeypatch.setattr(benchmarker, "init_vectordb", _capture_vectordb)
     vectordb = benchmarker.build(dataset)
 
@@ -217,31 +231,8 @@ def test_recall_at_k_edges():
     assert 0.0 <= benchmark.recall_at_k(I_true, I_test, 5) <= 1.0
 
 
-def test_load_cfg(tmp_path, config_yaml):
-    benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
-    assert benchmarker.cfg.dataset.dataset_id == "sagecontinuum/INQUIRE-Benchmark-small"
-
-    # Bad path: missing file raises (FileNotFoundError or OSError depending on impl)
-    with pytest.raises((FileNotFoundError, OSError, IOError)):
-        Benchmarker(tmp_path / "nope.yaml", base_path=tmp_path)
-
-
-def test_init_vectordb(monkeypatch, config_yaml):
-    params = {"metric": "ip", "nlist": 123, "m": 16}
-
-    benchmarker = Benchmarker(config_yaml)
-    vdb = benchmarker.init_vectordb("faiss.ivfpq", dim=64, init_params=params)
-
-    assert vdb.dim == 64
-    assert vdb.metric == "ip"
-    assert vdb.nlist == 123
-    assert vdb.m == 16
-
-
 def test_run_all(config_yaml, tmp_path, caplog):
     benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
-    # Change nbits so we have a smaller number of clusters
-    benchmarker.cfg.vectordb.params.nbits = 2
     benchmarker.run()
 
     assert '"vectordb": "faiss.ivfpq"' in caplog.text

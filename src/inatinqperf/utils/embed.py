@@ -89,7 +89,7 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
 
         ids.extend([i + j for j in range(len(batch_imgs))])
         labels.extend(
-            [int(ds[i + j].get("labels", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
+            [int(ds[i + j].get("label", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
         )
 
     if all_emb:
@@ -129,16 +129,16 @@ def to_huggingface_dataset(
 
     feats = Features(
         {
-            "ids": Value("int64"),
-            "labels": label_feature,
-            "embeddings": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
+            "id": Value("int64"),
+            "label": label_feature,
+            "embedding": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
         },
     )
     return Dataset.from_dict(
         {
-            "ids": dataset.ids,
-            "labels": label_values,
-            "embeddings": dataset.embeddings,
+            "id": dataset.ids,
+            "label": label_values,
+            "embedding": dataset.embeddings,
         },
         features=feats,
     )

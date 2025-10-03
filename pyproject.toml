@@ -118,5 +118,8 @@ max-args = 10
 max-branches = 20
 max-returns = 20
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.uv.build-backend]
 module-name = "inatinqperf"

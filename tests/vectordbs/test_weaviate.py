@@ -19,7 +19,7 @@ SCHEMA_ENDPOINT = f"{BASE_URL}/v1/schema"
 GRAPHQL_ENDPOINT = f"{BASE_URL}/v1/graphql"
 READY_ENDPOINT = f"{BASE_URL}/v1/.well-known/ready"
 
-# Pin to a concrete tag published in the official Weaviate registry. 
+# Pin to a concrete tag published in the official Weaviate registry.
 # Registry doesn't have a latest tag
 WEAVIATE_IMAGE = "semitechnologies/weaviate:1.31.16-ab5cb66.arm64"
 WEAVIATE_COMMAND = ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
@@ -160,7 +160,7 @@ def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
 
 @pytest.fixture(scope="module", autouse=True)
 def container_fixture():
-    """Start the docker container with the vector DB."""
+    """Start the docker container with the weaviate."""
     client = docker.from_env()
     container = client.containers.run(
         WEAVIATE_IMAGE,
@@ -195,7 +195,7 @@ def test_create_collection(class_name: str):
 
 
 def test_vector_insertion(class_name: str):
-    """Test insertion of vectors into the database."""
+    """Test insertion of vectors into the weaviate."""
     num_vectors = 117
     rng = np.random.default_rng(seed=101)
     vectors = rng.random((num_vectors, 100))
@@ -207,7 +207,7 @@ def test_vector_insertion(class_name: str):
 
 @pytest.mark.regression
 def test_search(class_name: str):
-    """Test search capabilities of the vector DB."""
+    """Test search capabilities of the weaviate."""
     rng = np.random.default_rng(seed=101)
     vectors = rng.random((101, 100))
     query_vector = rng.random(100)

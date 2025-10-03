@@ -14,10 +14,20 @@ app = typer.Typer()
 @app.command("run")
 def main(
     config_file: Annotated[
-        Path, typer.Argument(help="The configuration file to use for running the benchmark.")
+        Path,
+        typer.Argument(
+            ensure_exists=True,
+            dir_okay=False,
+            help="The configuration file to use for running the benchmark.",
+        ),
     ],
     base_path: Annotated[
-        Path, typer.Option(help="The base path relative to which various artifacts are saved.")
+        Path,
+        typer.Option(
+            ensure_exists=True,
+            file_okay=False,
+            help="The base path relative to which various artifacts are saved.",
+        ),
     ] = Path(__file__).parent.parent,
 ) -> None:
     """Vector Database agnostic benchmark."""

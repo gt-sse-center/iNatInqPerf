@@ -109,7 +109,10 @@ class Benchmarker:
         export_raw_images = self.cfg.dataset.export_images
         splits = self.cfg.dataset.splits
 
-        with Profiler(f"download-{dataset_id.split('/')[-1]}-{splits}"):
+        with Profiler(
+            f"download-{dataset_id.split('/')[-1]}-{splits}",
+            containers=self.cfg.vectordb.containers,
+        ):
             ds = load_huggingface_dataset(dataset_id, splits)
             ds.save_to_disk(dataset_dir)
 
@@ -135,7 +138,7 @@ class Benchmarker:
         dataset_dir = self.base_path / self.cfg.dataset.directory
         logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
-        with Profiler("embed-images"):
+        with Profiler("embed-images", containers=self.cfg.vectordb.containers):
             dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
 
         return self.save_as_huggingface_dataset(dse, embeddings_dir=embeddings_dir)
@@ -167,8 +170,10 @@ class Benchmarker:
 
         init_params = self.cfg.vectordb.params.to_dict()
 
-        with Profiler(f"build-{vdb_type}"):
-            vdb = VECTORDBS[vdb_type](dataset, **init_params)
+        with Profiler(f"build-{vdb_type}", containers=self.cfg.vectordb.containers):
+            # training if needed
+            vdb.train_index(x)
+            vdb.upsert(ids, x)
 
         logger.info(f"Stats: {vdb.stats()}")
 
@@ -212,10 +217,14 @@ class Benchmarker:
                 i0[i] = padded
 
         # search + profile
-        logger.info(f"Performing search on {self.cfg.vectordb.type}")
-        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
-            latencies = []
-            for i in tqdm(range(q.shape[0])):
+        with Profiler(
+            f"search-{self.cfg.vectordb.type}",
+            containers=self.cfg.vectordb.containers,
+        ) as p:
+            lat = []
+            _, i0 = baseline_vectordb.search(q, topk)  # exact
+
+            for i in tqdm.tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
                 vectordb.search(Query(q[i]), topk, **params.to_dict())
                 latencies.append((time.perf_counter() - t0) * 1000.0)
@@ -263,12 +272,12 @@ class Benchmarker:
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
         add_ids = list(range(add_n))
 
-        with Profiler(f"update-add-{vdb_type}"):
+        with Profiler(f"update-add-{vdb_type}", containers=self.cfg.vectordb.containers):
             data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]
             vectordb.upsert(data_points)
 
-        with Profiler(f"update-delete-{vdb_type}"):
-            del_ids = add_ids[:del_n]
+        with Profiler(f"update-delete-{vdb_type}", containers=self.cfg.vectordb.containers):
+            del_ids = list(add_ids[:del_n])
             vectordb.delete(del_ids)
 
         logger.info(f"Update complete: {vectordb.stats()}")

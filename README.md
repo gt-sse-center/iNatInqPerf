@@ -81,6 +81,7 @@ data/raw/
 - Latency statistics (avg, p50, p95)
 - Recall@K vs baseline
 - JSON metrics in `.results/`
+- Optional Docker container CPU & memory summaries when `vectordb.containers` is specified in the benchmark config
 
 ## Profiling with py-spy
 

@@ -55,6 +55,7 @@ class VectorDatabaseConfig(BaseModel):
 
     type: NonEmptyStr
     params: VectorDatabaseParams
+    containers: list[NonEmptyStr] | None = None
 
 
 class SearchParams(BaseModel):

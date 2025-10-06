@@ -70,3 +70,77 @@ def test_profiler_multiple_steps_create_distinct_files(tmp_path):
     # Metrics differ at least in step name
     assert p1.metrics["step"] == "step1"
     assert p2.metrics["step"] == "step2"
+
+
+class _StubContainer:
+    def __init__(self) -> None:
+        self.id = "stub123"
+        self.name = "stub"
+
+    def stats(self, stream: bool = False):  # noqa: FBT001, FBT002
+        return {
+            "memory_stats": {"usage": 21 * 1024 * 1024},
+            "cpu_stats": {
+                "cpu_usage": {
+                    "total_usage": 200_000_000,
+                    "percpu_usage": [100_000_000, 100_000_000],
+                },
+                "system_cpu_usage": 2_000_000_000,
+                "online_cpus": 2,
+            },
+            "precpu_stats": {
+                "cpu_usage": {"total_usage": 100_000_000},
+                "system_cpu_usage": 1_000_000_000,
+            },
+        }
+
+
+def test_profiler_tracks_container_metrics(tmp_path):
+    results_dir = tmp_path / ".results"
+    container = _StubContainer()
+    p = profiler.Profiler("step-cont", results_dir=results_dir, containers=[container])
+
+    with p as prof:
+        prof.sample()
+        time.sleep(0.001)
+
+    container_metrics = p.metrics.get("containers")
+    assert container_metrics is not None
+    assert len(container_metrics) == 1
+    metrics = container_metrics[0]
+    assert metrics["id"] == container.id
+    assert metrics["name"] == container.name
+    assert metrics["samples"] >= 2
+    assert metrics["cpu_avg_percent"] > 0
+    assert metrics["mem_max_mb"] >= metrics["mem_avg_mb"] > 0
+
+
+class _StubDockerClient:
+    def __init__(self, container: _StubContainer) -> None:
+        self._container = container
+        self.containers = self
+
+    def get(self, identifier: str):  # noqa: D401 - simple passthrough
+        if identifier != self._container.id:
+            raise RuntimeError("unknown container")
+        return self._container
+
+
+def test_profiler_registers_container_by_identifier(tmp_path):
+    container = _StubContainer()
+    docker_client = _StubDockerClient(container)
+    results_dir = tmp_path / ".results"
+
+    p = profiler.Profiler(
+        "step-ident",
+        results_dir=results_dir,
+        containers=[container.id],
+        docker_client=docker_client,
+    )
+
+    with p:
+        time.sleep(0.001)
+
+    metrics = p.metrics.get("containers")
+    assert metrics is not None
+    assert metrics[0]["id"] == container.id

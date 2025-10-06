@@ -40,6 +40,7 @@ def test_vectordatabase_config(benchmark_yaml):
     config = VectorDatabaseConfig(**benchmark_yaml["vectordb"])
     assert config.type == "faiss"
     assert isinstance(config.params, VectorDatabaseParams)
+    assert config.containers is None
 
 
 def test_search_params(benchmark_yaml):

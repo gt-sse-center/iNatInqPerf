@@ -146,7 +146,7 @@ class Weaviate(VectorDatabase):
                 self._raise_error("failed to upsert object", response)
 
     def search(self, q: np.ndarray, topk: int, **kwargs: object) -> tuple[np.ndarray, np.ndarray]:
-        """Run nearest-neighbour search using GraphQL."""
+        """Run nearest-neighbor search using GraphQL."""
         if topk <= 0:
             msg = "topk must be positive"
             raise ValueError(msg)
@@ -156,7 +156,7 @@ class Weaviate(VectorDatabase):
             msg = "Query vectors must be 2-D with correct dimensionality"
             raise ValueError(msg)
 
-        limit = int(topk)
+        limit = topk
         n_queries = queries.shape[0]
         distances = np.full((n_queries, limit), np.inf, dtype=np.float32)
         ids = np.full((n_queries, limit), -1, dtype=np.int64)
@@ -186,7 +186,7 @@ class Weaviate(VectorDatabase):
                     ids[row, col] = int(original)
                 else:
                     try:
-                        ids[row, col] = self._recover_original_id(id_str) if id_str is not None else -1
+                        ids[row, col] = self._validate_uuid(id_str) if id_str is not None else -1
                     except ValueError:
                         ids[row, col] = -1
                 distances[row, col] = distance
@@ -204,7 +204,10 @@ class Weaviate(VectorDatabase):
 
     def stats(self) -> dict[str, object]:
         """Return basic statistics derived from Weaviate aggregate queries."""
-        aggregate_query = {"query": self._build_count_query()}
+        count_query = (
+            f"{{\n  Aggregate {{\n    {self.class_name} {{\n      meta {{ count }}\n    }}\n  }}\n}}"
+        )
+        aggregate_query = {"query": count_query}
         response = self._session.post(self._graphql_endpoint, json=aggregate_query, timeout=self.timeout)
         if response.status_code != HTTPStatus.OK:
             self._raise_error("failed to fetch stats", response)
@@ -284,7 +287,7 @@ class Weaviate(VectorDatabase):
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"inatinqperf:{identifier}"))
 
     @staticmethod
-    def _recover_original_id(object_id: str) -> int:
+    def _validate_uuid(object_id: str) -> int:
         """Fallback when the search response omits the originalId property."""
 
         try:

@@ -407,10 +407,10 @@ def test_constructor_and_distance_mapping():
 def test_recover_original_id_helpers():
     """Recover helper should accept UUIDs and reject malformed values."""
     valid_uuid = str(uuid.uuid4())
-    assert Weaviate._recover_original_id(valid_uuid) == -1
+    assert Weaviate._validate_uuid(valid_uuid) == -1
 
     with pytest.raises(ValueError):
-        Weaviate._recover_original_id("not-a-uuid")
+        Weaviate._validate_uuid("not-a-uuid")
 
 
 def test_upsert_raises_when_delete_fails(adaptor_with_stub):

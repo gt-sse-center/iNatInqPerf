@@ -1,0 +1,30 @@
+dataset:
+  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
+  splits: "validation+test"
+  directory: data/inquire_benchmark/raw
+  export_images: true
+
+embedding:
+  model_id: openai/clip-vit-base-patch32
+  batch_size: 64
+  directory: data/inquire_benchmark/emb
+
+vectordb:
+  type: weaviate.hnsw
+  params:
+    metric: cosine
+    base_url: http://localhost:8080
+    class_name: InatinqperfBenchmark
+    timeout: 30
+    container_hint: >-
+      docker run --rm -p 8080:8080 -p 8081:8081
+      semitechnologies/weaviate:1.31.16-ab5cb66.arm64
+      --host 0.0.0.0 --port 8080 --scheme http
+
+search:
+  topk: 10
+  queries_file: benchmark/queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30

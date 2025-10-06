@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BaseModel, PositiveInt, StringConstraints
+from pydantic import BaseModel, ConfigDict, PositiveInt, StringConstraints
 
 from inatinqperf.adaptors.metric import Metric
 
@@ -31,15 +31,16 @@ class EmbeddingParams(BaseModel):
 class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
-    metric: Metric
+    metric: Metric | None
+    model_config = ConfigDict(extra="allow")
     nlist: int | None = None
     m: int | None = None
     nbits: int | None = None
     nprobe: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Return parameters as a simple dictionary."""
-        return self.__dict__
+        """Return parameters, including extra fields, omitting unset values."""
+        return {key: value for key, value in self.model_dump().items() if value is not None}
 
 
 class VectorDatabaseConfig(BaseModel):

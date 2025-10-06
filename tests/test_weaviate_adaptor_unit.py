@@ -8,7 +8,11 @@ import uuid
 import numpy as np
 import pytest
 
+<<<<<<< HEAD
 from inatinqperf.adaptors.weaviate_adaptor import DistanceMetric, Weaviate, WeaviateError
+=======
+from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateError
+>>>>>>> 90cbe60 (weviate adaptor working)
 
 
 class FakeResponse:
@@ -398,19 +402,33 @@ def test_constructor_and_distance_mapping():
         _ = Weaviate(dim=0, metric="cosine")
 
     adaptor_ip = Weaviate(dim=2, metric="ip")
+<<<<<<< HEAD
     assert adaptor_ip._distance_metric is DistanceMetric.DOT
 
     adaptor_l2 = Weaviate(dim=2, metric="l2")
     assert adaptor_l2._distance_metric is DistanceMetric.L2_SQUARED
+=======
+    assert adaptor_ip._distance_metric == "dot"
+
+    adaptor_l2 = Weaviate(dim=2, metric="l2")
+    assert adaptor_l2._distance_metric == "l2-squared"
+>>>>>>> 90cbe60 (weviate adaptor working)
 
 
 def test_recover_original_id_helpers():
     """Recover helper should accept UUIDs and reject malformed values."""
     valid_uuid = str(uuid.uuid4())
+<<<<<<< HEAD
     assert Weaviate._validate_uuid(valid_uuid) == -1
 
     with pytest.raises(ValueError):
         Weaviate._validate_uuid("not-a-uuid")
+=======
+    assert Weaviate._recover_original_id(valid_uuid) == -1
+
+    with pytest.raises(ValueError):
+        Weaviate._recover_original_id("not-a-uuid")
+>>>>>>> 90cbe60 (weviate adaptor working)
 
 
 def test_upsert_raises_when_delete_fails(adaptor_with_stub):

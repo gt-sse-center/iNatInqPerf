@@ -3,8 +3,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from datasets import Dataset
-
 import numpy as np
 
 
@@ -20,7 +18,7 @@ class VectorDatabase(ABC):
         """Drop the index."""
 
     @abstractmethod
-    def upsert(self, data: Dataset) -> None:
+    def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Upsert vectors with given IDs."""
 
     @abstractmethod

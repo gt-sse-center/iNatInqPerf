@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import faiss
 import numpy as np
 import tqdm
 import yaml
@@ -14,6 +13,7 @@ from loguru import logger
 
 from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import VectorDatabase
+from inatinqperf.adaptors.faiss_adaptor import FaissFlat
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
 from inatinqperf.utils.embed import (
@@ -120,8 +120,8 @@ class Benchmarker:
         """Build index for the specified vectordb."""
         vdb_type = self.cfg.vectordb.type
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
-        ids = np.array(dataset["id"], dtype=np.int64)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        ids = np.array(dataset["ids"], dtype=np.int64)
 
         logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
@@ -138,26 +138,26 @@ class Benchmarker:
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
         metric = self.cfg.vectordb.params.metric.lower()
 
         # Create exact baseline
         d = x.shape[1]
-        base_index = faiss.IndexFlatIP(d) if metric in ("ip", "cosine") else faiss.IndexFlatL2(d)
-        index = faiss.IndexIDMap2(base_index)
 
+        faiss_flat_db = FaissFlat(dim=d, metric=metric)
         ids = np.arange(x.shape[0], dtype=np.int64)
-        index.add_with_ids(x.astype(np.float32), ids)
+        faiss_flat_db.upsert(ids=ids, x=x)
 
         logger.info("Created exact baseline index")
-        return index
+
+        return faiss_flat_db
 
     def search(self, dataset: Dataset, vectordb: VectorDatabase, baseline_vectordb: VectorDatabase) -> None:
         """Profile search and compute recall@K vs exact baseline."""
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
 
         topk = self.cfg.search.topk
 
@@ -209,7 +209,7 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.stack(dataset["embeddings"]).astype(np.float32)
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)

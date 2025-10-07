@@ -8,7 +8,7 @@ import uuid
 import numpy as np
 import pytest
 
-from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateError
+from inatinqperf.adaptors.weaviate_adaptor import DistanceMetric, Weaviate, WeaviateError
 
 
 class FakeResponse:
@@ -398,10 +398,10 @@ def test_constructor_and_distance_mapping():
         _ = Weaviate(dim=0, metric="cosine")
 
     adaptor_ip = Weaviate(dim=2, metric="ip")
-    assert adaptor_ip._distance_metric == "dot"
+    assert adaptor_ip._distance_metric is DistanceMetric.DOT
 
     adaptor_l2 = Weaviate(dim=2, metric="l2")
-    assert adaptor_l2._distance_metric == "l2-squared"
+    assert adaptor_l2._distance_metric is DistanceMetric.L2_SQUARED
 
 
 def test_recover_original_id_helpers():

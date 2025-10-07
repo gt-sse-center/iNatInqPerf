@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from enum import Enum
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,14 @@ if TYPE_CHECKING:
 
 class WeaviateError(RuntimeError):
     """Raised when Weaviate responds with an unexpected status code."""
+
+
+class DistanceMetric(Enum):
+    """Weaviate-supported distance metrics."""
+
+    DOT = "dot"
+    COSINE = "cosine"
+    L2_SQUARED = "l2-squared"
 
 
 class Weaviate(VectorDatabase):
@@ -79,7 +88,7 @@ class Weaviate(VectorDatabase):
             "vectorizer": self.vectorizer,
             "vectorIndexType": "hnsw",
             "vectorIndexConfig": {
-                "distance": self._distance_metric,
+                "distance": self._distance_metric.value,
                 "vectorCacheMaxObjects": 1_000_000,
             },
             "properties": [
@@ -103,7 +112,7 @@ class Weaviate(VectorDatabase):
         logger.info(
             "[WeaviateAdaptor] Created class=%s (distance=%s vectorizer=%s)",
             self.class_name,
-            self._distance_metric,
+            self._distance_metric.value,
             self.vectorizer,
         )
 
@@ -126,6 +135,8 @@ class Weaviate(VectorDatabase):
             raise ValueError(msg)
 
         self.train_index(vectors)
+        # Prefer best-effort ingestion: we validate matching lengths above, but leave
+        # strict=False so late mismatches drop extras instead of aborting the batch.
         for identifier, vector in zip(ids, vectors, strict=False):
             obj_id = self._make_object_id(int(identifier))
             # Delete any pre-existing object so POST remains consistent.
@@ -249,13 +260,13 @@ class Weaviate(VectorDatabase):
             self._raise_error("failed to probe class", response)
         return True
 
-    def _weaviate_distance(self) -> str:
+    def _weaviate_distance(self) -> DistanceMetric:
         if self.metric in {"ip", "inner_product", "dot"}:
-            return "dot"
+            return DistanceMetric.DOT
         if self.metric in {"cos", "cosine"}:
-            return "cosine"
+            return DistanceMetric.COSINE
         if self.metric in {"l2", "euclidean"}:
-            return "l2-squared"
+            return DistanceMetric.L2_SQUARED
         msg = f"Unsupported metric '{self.metric}'"
         raise ValueError(msg)
 

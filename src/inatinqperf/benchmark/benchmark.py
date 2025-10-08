@@ -120,8 +120,8 @@ class Benchmarker:
         """Build index for the specified vectordb."""
         vdb_type = self.cfg.vectordb.type
 
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
-        ids = np.array(dataset["ids"], dtype=np.int64)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
+        ids = np.array(dataset["id"], dtype=np.int64)
 
         logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
@@ -138,7 +138,7 @@ class Benchmarker:
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
         metric = self.cfg.vectordb.params.metric.lower()
 
         # Create exact baseline
@@ -157,7 +157,7 @@ class Benchmarker:
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
 
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
 
         topk = self.cfg.search.topk
 
@@ -209,7 +209,7 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.stack(dataset["embeddings"]).astype(np.float32)
+        x = np.stack(dataset["embedding"]).astype(np.float32)
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)

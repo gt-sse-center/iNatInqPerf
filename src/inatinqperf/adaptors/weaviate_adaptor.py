@@ -106,7 +106,7 @@ class Weaviate(VectorDatabase):
                 response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
                 and "already exists" in response.text.lower()
             ):
-                logger.info("[WeaviateAdaptor] Class %s already exists.", self.class_name)
+                logger.info(f"[WeaviateAdaptor] Class {self.class_name} already exists.")
                 return
             self._raise_error("failed to create class", response)
         logger.info(
@@ -162,11 +162,7 @@ class Weaviate(VectorDatabase):
             msg = "topk must be positive"
             raise ValueError(msg)
 
-        queries = np.asarray(q, dtype=np.float32)
-        if queries.ndim != self.INATINQ_WEVIATE_QUERY_DIM or queries.shape[1] != self.dim:
-            msg = "Query vectors must be 2-D with correct dimensionality"
-            raise ValueError(msg)
-
+        queries = self._prepare_query_vectors(q)
         limit = topk
         n_queries = queries.shape[0]
         distances = np.full((n_queries, limit), np.inf, dtype=np.float32)
@@ -279,6 +275,14 @@ class Weaviate(VectorDatabase):
         data = payload.get("data", {})
         get_section = data.get("Get", {})
         return get_section.get(self.class_name, [])
+
+    def _prepare_query_vectors(self, q: np.ndarray) -> np.ndarray:
+        """Coerce incoming queries to float32 and validate dimensionality."""
+        queries = np.asarray(q, dtype=np.float32)
+        if queries.ndim != self.INATINQ_WEVIATE_QUERY_DIM or queries.shape[1] != self.dim:
+            msg = "Query vectors must be 2-D with correct dimensionality"
+            raise ValueError(msg)
+        return queries
 
     def _extract_count(self, payload: dict) -> int:
         if payload.get("errors"):

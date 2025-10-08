@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-import faiss
 import numpy as np
 import tqdm
 import yaml
@@ -14,6 +13,7 @@ from loguru import logger
 
 from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import VectorDatabase
+from inatinqperf.adaptors.faiss_adaptor import FaissFlat
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
 from inatinqperf.utils.embed import (
@@ -143,14 +143,14 @@ class Benchmarker:
 
         # Create exact baseline
         d = x.shape[1]
-        base_index = faiss.IndexFlatIP(d) if metric in ("ip", "cosine") else faiss.IndexFlatL2(d)
-        index = faiss.IndexIDMap2(base_index)
 
+        faiss_flat_db = FaissFlat(dim=d, metric=metric)
         ids = np.arange(x.shape[0], dtype=np.int64)
-        index.add_with_ids(x.astype(np.float32), ids)
+        faiss_flat_db.upsert(ids=ids, x=x)
 
         logger.info("Created exact baseline index")
-        return index
+
+        return faiss_flat_db
 
     def search(self, dataset: Dataset, vectordb: VectorDatabase, baseline_vectordb: VectorDatabase) -> None:
         """Profile search and compute recall@K vs exact baseline."""

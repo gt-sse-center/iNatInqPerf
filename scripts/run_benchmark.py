@@ -16,7 +16,7 @@ def main(
     config_file: Annotated[
         Path,
         typer.Argument(
-            ensure_exists=True,
+            exists=True,
             dir_okay=False,
             help="The configuration file to use for running the benchmark.",
         ),
@@ -24,7 +24,7 @@ def main(
     base_path: Annotated[
         Path,
         typer.Option(
-            ensure_exists=True,
+            exists=True,
             file_okay=False,
             help="The base path relative to which various artifacts are saved.",
         ),

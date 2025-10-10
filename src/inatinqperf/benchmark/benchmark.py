@@ -2,10 +2,12 @@
 
 import json
 import time
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import requests
 import tqdm
 import yaml
 from datasets import Dataset
@@ -125,6 +127,8 @@ class Benchmarker:
 
         logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
+        if vdb_type.startswith("weaviate"):
+            self._validate_weaviate_params(init_params)
         vdb = self.init_vectordb(vdb_type, x.shape[1], init_params=init_params)
 
         with Profiler(f"build-{vdb_type}"):
@@ -135,6 +139,39 @@ class Benchmarker:
         logger.info(f"Stats: {vdb.stats()}")
 
         return vdb
+
+    @staticmethod
+    def _validate_weaviate_params(params: dict[str, Any]) -> None:
+        """Ensure required Weaviate settings exist and the service is reachable."""
+
+        required_keys = ["base_url", "class_name"]
+        missing = [key for key in required_keys if not params.get(key)]
+        if missing:
+            missing_str = ", ".join(missing)
+            raise ValueError(
+                "Weaviate configuration missing required parameter(s): "
+                + missing_str
+                + "Please update your benchmark config."
+            )
+
+        base_url = str(params.pop("base_url")).rstrip("/")
+        params["base_url"] = base_url
+        params.pop("container_hint", None)
+        readiness_endpoint = f"{base_url}/v1/.well-known/ready"
+
+        try:
+            response = requests.get(readiness_endpoint, timeout=5)
+        except requests.RequestException as exc:
+            error_desc = f"Make sure a weaviate container is running and serving at {base_url}."
+            raise RuntimeError("Unable to reach Weaviate" + error_desc) from exc
+
+        if response.status_code != HTTPStatus.OK:
+            error_desc = f" Weaviate readiness enpoint returned status code {response.status_code}."
+            raise RuntimeError(
+                "Weaviate readiness endpoint "
+                + error_desc
+                + "Start or fix the Weaviate container before running the benchmark."
+            )
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""

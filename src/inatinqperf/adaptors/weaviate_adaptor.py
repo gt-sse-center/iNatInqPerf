@@ -1,13 +1,10 @@
 """Adaptor for interacting with a running Weaviate instance via HTTP."""
 
-from __future__ import annotations
-
 import json
 import time
 import uuid
-from enum import Enum
+from collections.abc import Sequence
 from http import HTTPStatus
-from typing import TYPE_CHECKING
 
 import numpy as np
 import requests
@@ -15,21 +12,11 @@ from loguru import logger
 from requests import Response, Session
 
 from inatinqperf.adaptors.base import VectorDatabase
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
+from inatinqperf.adaptors.metric import Metric
 
 
 class WeaviateError(RuntimeError):
     """Raised when Weaviate responds with an unexpected status code."""
-
-
-class DistanceMetric(Enum):
-    """Weaviate-supported distance metrics."""
-
-    DOT = "dot"
-    COSINE = "cosine"
-    L2_SQUARED = "l2-squared"
 
 
 class Weaviate(VectorDatabase):
@@ -40,7 +27,7 @@ class Weaviate(VectorDatabase):
     def __init__(
         self,
         dim: int,
-        metric: str = "cosine",
+        metric: str = Metric.COSINE,
         *,
         base_url: str = "http://localhost:8080",
         class_name: str = "collection_name",
@@ -53,12 +40,12 @@ class Weaviate(VectorDatabase):
             raise ValueError(msg)
 
         self.dim = int(dim)
-        self.metric = metric.lower()
+        self.metric = metric
         self.base_url = base_url.rstrip("/")
         self.class_name = class_name
         self.timeout = timeout
         self.vectorizer = vectorizer
-        self._distance_metric = self._weaviate_distance()
+        self._distance_metric = self._translate_metric(metric)
 
         self._session: Session = requests.Session()
         self._schema_endpoint = f"{self.base_url}/v1/schema"
@@ -67,11 +54,8 @@ class Weaviate(VectorDatabase):
         self._ready_endpoint = f"{self.base_url}/v1/.well-known/ready"
 
         logger.info(
-            "[WeaviateAdaptor] Initialized class='%s' base_url=%s dim=%s metric=%s",
-            self.class_name,
-            self.base_url,
-            self.dim,
-            self.metric,
+            f"""[WeaviateAdaptor] Initialized class='{self.class_name}' """
+            f"""base_url={self.base_url} dim={self.dim} metric={self.metric.value}"""
         )
 
     # ------------------------------------------------------------------
@@ -88,7 +72,7 @@ class Weaviate(VectorDatabase):
             "vectorizer": self.vectorizer,
             "vectorIndexType": "hnsw",
             "vectorIndexConfig": {
-                "distance": self._distance_metric.value,
+                "distance": self._distance_metric,
                 "vectorCacheMaxObjects": 1_000_000,
             },
             "properties": [
@@ -106,14 +90,12 @@ class Weaviate(VectorDatabase):
                 response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
                 and "already exists" in response.text.lower()
             ):
-                logger.info("[WeaviateAdaptor] Class %s already exists.", self.class_name)
+                logger.info(f"[WeaviateAdaptor] Class {self.class_name} already exists.")
                 return
             self._raise_error("failed to create class", response)
         logger.info(
-            "[WeaviateAdaptor] Created class=%s (distance=%s vectorizer=%s)",
-            self.class_name,
-            self._distance_metric.value,
-            self.vectorizer,
+            f"""[WeaviateAdaptor] Created class={self.class_name} """
+            f"""(distance={self._distance_metric} vectorizer={self.vectorizer})"""
         )
 
     def drop_index(self) -> None:
@@ -121,7 +103,7 @@ class Weaviate(VectorDatabase):
         response = self._session.delete(f"{self._schema_endpoint}/{self.class_name}", timeout=self.timeout)
         if response.status_code not in {HTTPStatus.OK, HTTPStatus.NO_CONTENT, HTTPStatus.NOT_FOUND}:
             self._raise_error("failed to delete class", response)
-        logger.info("[WeaviateAdaptor] Dropped class %s", self.class_name)
+        logger.info(f"[WeaviateAdaptor] Dropped class {self.class_name}")
 
     def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Insert or update vectors in Weaviate."""
@@ -173,7 +155,7 @@ class Weaviate(VectorDatabase):
         ids = np.full((n_queries, limit), -1, dtype=np.int64)
 
         if kwargs:
-            logger.debug("[WeaviateAdaptor] Ignoring unused search kwargs: %s", kwargs)
+            logger.debug(f"[WeaviateAdaptor] Ignoring unused search kwargs: {kwargs}")
 
         for row, vec in enumerate(queries):
             vector_json = json.dumps(vec.tolist())
@@ -226,12 +208,12 @@ class Weaviate(VectorDatabase):
         count = self._extract_count(data)
         stats = {
             "ntotal": count,
-            "metric": self.metric,
+            "metric": self.metric.value,
             "class_name": self.class_name,
             "base_url": self.base_url,
             "dim": self.dim,
         }
-        logger.debug("[WeaviateAdaptor] Stats for %s: %s", self.class_name, stats)
+        logger.debug(f"[WeaviateAdaptor] Stats for {self.class_name}: {stats}")
         return stats
 
     # ------------------------------------------------------------------
@@ -244,7 +226,7 @@ class Weaviate(VectorDatabase):
             response = self._session.get(self._ready_endpoint, timeout=2)
             last_response = response
             if response.status_code == HTTPStatus.OK:
-                logger.info("[WeaviateAdaptor] Weaviate instance ready at %s", self.base_url)
+                logger.info(f"[WeaviateAdaptor] Weaviate instance ready at {self.base_url}")
                 return
             time.sleep(0.5)
         if last_response is None:
@@ -260,14 +242,16 @@ class Weaviate(VectorDatabase):
             self._raise_error("failed to probe class", response)
         return True
 
-    def _weaviate_distance(self) -> DistanceMetric:
-        if self.metric in {"ip", "inner_product", "dot"}:
-            return DistanceMetric.DOT
-        if self.metric in {"cos", "cosine"}:
-            return DistanceMetric.COSINE
-        if self.metric in {"l2", "euclidean"}:
-            return DistanceMetric.L2_SQUARED
-        msg = f"Unsupported metric '{self.metric}'"
+    @staticmethod
+    def _translate_metric(metric: Metric) -> str:
+        if metric == Metric.INNER_PRODUCT:
+            return "dot"
+        if metric == Metric.COSINE:
+            return "cosine"
+        if metric == Metric.L2:
+            return "l2-squared"
+
+        msg = f"Unsupported metric '{metric}'"
         raise ValueError(msg)
 
     def _build_count_query(self) -> str:

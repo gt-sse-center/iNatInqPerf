@@ -8,11 +8,8 @@ import uuid
 import numpy as np
 import pytest
 
-<<<<<<< HEAD
-from inatinqperf.adaptors.weaviate_adaptor import DistanceMetric, Weaviate, WeaviateError
-=======
+from inatinqperf.adaptors.metric import Metric
 from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateError
->>>>>>> 90cbe60 (weviate adaptor working)
 
 
 class FakeResponse:
@@ -82,7 +79,7 @@ class StubSession:
 def adaptor_with_stub_fixture():
     """Provide a Weaviate adaptor wired to the stub session for unit tests."""
     # Minimal stub adaptor -> every test reuses this to avoid real HTTP calls.
-    adaptor = Weaviate(dim=3, metric="cosine", base_url="http://example.com", class_name="TestClass")
+    adaptor = Weaviate(dim=3, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
     stub = StubSession("TestClass")
     adaptor._session = stub  # type: ignore[attr-defined]
     adaptor._check_ready = lambda: None  # type: ignore[attr-defined]
@@ -99,7 +96,7 @@ def test_train_index_creates_class(adaptor_with_stub):
 
 def test_train_index_ignores_existing_class():
     """Ensure 422 from Weaviate (already exists) is treated as success."""
-    adaptor = Weaviate(dim=3, metric="cosine", base_url="http://example.com", class_name="TestClass")
+    adaptor = Weaviate(dim=3, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
     stub = StubSession("TestClass")
 
     def already_exists_post(url, json=None, timeout=None):  # type: ignore[arg-type]
@@ -170,7 +167,7 @@ def test_delete_handles_multiple_ids(adaptor_with_stub):
 def test_invalid_metric_raises_value_error():
     """Constructor should reject unsupported distance metrics."""
     with pytest.raises(ValueError):
-        _ = Weaviate(dim=2, metric="manhattan")
+        Weaviate(dim=2, metric="manhattan")
 
 
 def test_upsert_rejects_dimension_mismatch(adaptor_with_stub):
@@ -224,7 +221,7 @@ def test_error_responses_raise_weaviate_error(adaptor_with_stub):
 
 def test_drop_index_raises_on_failure():
     """DELETE failures should propagate as WeaviateError."""
-    adaptor = Weaviate(dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass")
+    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
     stub = StubSession("TestClass")
     stub.delete = lambda url, timeout=None: FakeResponse(500, text="kaboom")  # type: ignore[arg-type,assignment]
     adaptor._session = stub  # type: ignore[attr-defined]
@@ -234,7 +231,7 @@ def test_drop_index_raises_on_failure():
 
 def test_drop_index_success():
     """Successful drop should issue a delete call."""
-    adaptor = Weaviate(dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass")
+    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
     stub = StubSession("TestClass")
     adaptor._session = stub  # type: ignore[attr-defined]
     adaptor.drop_index()
@@ -244,7 +241,7 @@ def test_drop_index_success():
 def test_check_ready_times_out_quickly(monkeypatch):
     """Readiness polling should surface repeated non-200 responses."""
     adaptor = Weaviate(
-        dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass", timeout=0.6
+        dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.6
     )
     stub = StubSession("TestClass")
 
@@ -260,7 +257,7 @@ def test_check_ready_times_out_quickly(monkeypatch):
 def test_check_ready_success():
     """Healthy readiness endpoint should exit the polling loop."""
     adaptor = Weaviate(
-        dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass", timeout=1.0
+        dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=1.0
     )
     stub = StubSession("TestClass")
 
@@ -274,7 +271,7 @@ def test_check_ready_success():
 
 def test_class_exists_paths():
     """Class existence helper should handle 404/200 and error paths."""
-    adaptor = Weaviate(dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass")
+    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
     stub = StubSession("TestClass")
 
     # Not found -> False
@@ -294,7 +291,7 @@ def test_class_exists_paths():
 
 def test_train_index_raises_on_failed_creation():
     """train_index should raise when schema creation fails."""
-    adaptor = Weaviate(dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass")
+    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
     stub = StubSession("TestClass")
 
     def failing_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
@@ -399,36 +396,22 @@ def test_stats_handles_empty_entries(adaptor_with_stub):
 def test_constructor_and_distance_mapping():
     """Ensure basic constructor validation and metric mapping."""
     with pytest.raises(ValueError):
-        _ = Weaviate(dim=0, metric="cosine")
+        _ = Weaviate(dim=0, metric=Metric.COSINE)
 
-    adaptor_ip = Weaviate(dim=2, metric="ip")
-<<<<<<< HEAD
-    assert adaptor_ip._distance_metric is DistanceMetric.DOT
-
-    adaptor_l2 = Weaviate(dim=2, metric="l2")
-    assert adaptor_l2._distance_metric is DistanceMetric.L2_SQUARED
-=======
+    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
     assert adaptor_ip._distance_metric == "dot"
 
-    adaptor_l2 = Weaviate(dim=2, metric="l2")
+    adaptor_l2 = Weaviate(dim=2, metric=Metric.L2)
     assert adaptor_l2._distance_metric == "l2-squared"
->>>>>>> 90cbe60 (weviate adaptor working)
 
 
-def test_recover_original_id_helpers():
+def test_validate_uuid_helpers():
     """Recover helper should accept UUIDs and reject malformed values."""
     valid_uuid = str(uuid.uuid4())
-<<<<<<< HEAD
     assert Weaviate._validate_uuid(valid_uuid) == -1
 
     with pytest.raises(ValueError):
         Weaviate._validate_uuid("not-a-uuid")
-=======
-    assert Weaviate._recover_original_id(valid_uuid) == -1
-
-    with pytest.raises(ValueError):
-        Weaviate._recover_original_id("not-a-uuid")
->>>>>>> 90cbe60 (weviate adaptor working)
 
 
 def test_upsert_raises_when_delete_fails(adaptor_with_stub):
@@ -462,7 +445,7 @@ def test_upsert_raises_when_insert_fails(adaptor_with_stub):
 def test_check_ready_with_zero_timeout():
     """Zero timeout should immediately raise when readiness never returns 200."""
     adaptor = Weaviate(
-        dim=2, metric="cosine", base_url="http://example.com", class_name="TestClass", timeout=0.0
+        dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.0
     )
     stub = StubSession("TestClass")
     adaptor._session = stub  # type: ignore[attr-defined]

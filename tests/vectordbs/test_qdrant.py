@@ -6,8 +6,6 @@ import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
-import inatinqperf
-
 
 @pytest.fixture(scope="module", autouse=True)
 def container_fixture():

@@ -5,6 +5,8 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, PositiveInt, StringConstraints
 
+from inatinqperf.adaptors.metric import Metric
+
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 
 
@@ -29,7 +31,7 @@ class EmbeddingParams(BaseModel):
 class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
-    metric: NonEmptyStr
+    metric: Metric
     nlist: int | None = None
     m: int | None = None
     nbits: int | None = None

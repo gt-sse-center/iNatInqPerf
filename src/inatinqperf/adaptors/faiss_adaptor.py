@@ -1,6 +1,5 @@
 """FAISS vector database adaptor."""
 
-import enum
 from collections.abc import Sequence
 
 import faiss
@@ -8,27 +7,17 @@ import numpy as np
 from loguru import logger
 
 from inatinqperf.adaptors.base import VectorDatabase
-
-
-class Metric(enum.Enum):
-    """Enum for metrics used to compute vector similarity.
-
-    More details about FAISS metrics can be found here: https://github.com/facebookresearch/faiss/wiki/MetricType-and-distances
-    """
-
-    INNER_PRODUCT = 0  # maximum inner product search
-    COSINE = 1  # Cosine distance
-    L2 = 2  # Euclidean L2 distance
+from inatinqperf.adaptors.metric import Metric
 
 
 class Faiss(VectorDatabase):
     """Base class for FAISS vector database."""
 
-    def __init__(self, dim: int, metric: str = "ip") -> None:
+    def __init__(self, dim: int, metric: Metric = Metric.INNER_PRODUCT) -> None:
         super().__init__()
 
         self.dim = dim
-        self.metric = metric.lower()
+        self.metric = metric
 
         self.index = None
 
@@ -50,11 +39,15 @@ class Faiss(VectorDatabase):
 class FaissFlat(Faiss):
     """FAISS vector database with Flat index."""
 
-    def __init__(self, dim: int, metric: str = "ip", **params) -> None:  # noqa: ARG002
+    def __init__(self, dim: int, metric: Metric = Metric.INNER_PRODUCT, **params) -> None:  # noqa: ARG002
         """Initialize FAISS Flat index."""
         super().__init__(dim, metric)
 
-        base = faiss.IndexFlatIP(dim) if self.metric in ("ip", "cosine") else faiss.IndexFlatL2(dim)
+        if self.metric in (Metric.INNER_PRODUCT, Metric.COSINE):
+            base = faiss.IndexFlatIP(dim)
+        else:
+            base = faiss.IndexFlatL2(dim)
+
         self.index = faiss.IndexIDMap2(base)
 
     def train_index(self, x_train: np.ndarray) -> None:
@@ -70,7 +63,7 @@ class FaissFlat(Faiss):
         return {
             "ntotal": int(self.index.ntotal),
             "kind": "flat",
-            "metric": self.metric,
+            "metric": str(self.metric),
         }
 
 
@@ -105,7 +98,7 @@ class FaissIVFPQ(Faiss):
     def __init__(
         self,
         dim: int,
-        metric: str = "ip",
+        metric: Metric = Metric.INNER_PRODUCT,
         nlist: int = 32768,
         m: int = 64,
         nbits: int = 8,
@@ -121,7 +114,12 @@ class FaissIVFPQ(Faiss):
 
         # Build a robust composite index via index_factory
         desc = f"OPQ{self.m},IVF{nlist},PQ{self.m}x{self.nbits}"
-        self.metric_type = faiss.METRIC_INNER_PRODUCT if self.metric in ("ip", "cosine") else faiss.METRIC_L2
+
+        if self.metric in (Metric.INNER_PRODUCT, Metric.COSINE):
+            self.metric_type = faiss.METRIC_INNER_PRODUCT
+        else:
+            self.metric_type = faiss.METRIC_L2
+
         base = faiss.index_factory(dim, desc, self.metric_type)
         self.index = faiss.IndexIDMap2(base)
 
@@ -180,7 +178,7 @@ class FaissIVFPQ(Faiss):
         return {
             "ntotal": int(self.index.ntotal) if self.index is not None else 0,
             "kind": "ivfpq",
-            "metric": self.metric,
+            "metric": str(self.metric),
             "nlist": int(getattr(ivf, "nlist", -1)) if ivf is not None else None,
             "nprobe": int(getattr(ivf, "nprobe", -1)) if ivf is not None else None,
         }

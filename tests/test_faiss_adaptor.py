@@ -5,6 +5,7 @@ import pytest
 
 from inatinqperf.adaptors import faiss_adaptor
 from inatinqperf.adaptors.faiss_adaptor import FaissFlat, FaissIVFPQ
+from inatinqperf.adaptors.metric import Metric
 
 
 @pytest.fixture(name="small_data")
@@ -48,7 +49,7 @@ def ivfpq_trainset_fixture():
     return ids, X
 
 
-@pytest.mark.parametrize("metric", ["ip", "l2"])
+@pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
 def test_faiss_flat_lifecycle(metric, small_data):
     ids, X = small_data
     be = FaissFlat(dim=2, metric=metric)
@@ -81,7 +82,7 @@ def test_faiss_ivfpq_train_and_search_with_large_training(ivfpq_trainset, small_
     ids, X = small_data
 
     # Use fewer PQ centroids (nbits=4 -> 16) so 300 training points suffice without warnings
-    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=2)
 
     # training on sufficient dataset (silence FAISS native stderr warnings)
     be.train_index(X_train)
@@ -148,7 +149,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
     _, X_train = ivfpq_trainset
     ids, X = small_data
 
-    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=1)
+    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=1)
     be.train_index(X_train)
 
     # First insert
@@ -174,7 +175,7 @@ def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, 
 def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
     """Cover branch where topk > ntotal and deleting non-existent IDs is a no-op."""
     ids, X = small_data
-    be = FaissFlat(dim=2, metric="ip")
+    be = FaissFlat(dim=2, metric=Metric.INNER_PRODUCT)
     be.upsert(ids, X)
 
     Q = np.array([[0.2, 0.9]], dtype=np.float32)
@@ -195,7 +196,7 @@ def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
 
 def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
     # Build a real IVFPQ index and ensure unwrap hits the IVF layer
-    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=2)
     be.train_index(ivfpq_trainset[1])
 
     ivf = faiss_adaptor._unwrap_to_ivf(be.index.index)
@@ -221,7 +222,7 @@ def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data
 
 def test_faiss_ivfpq_empty_delete_noop(ivfpq_trainset, small_data):
     ids, X = small_data
-    be = FaissIVFPQ(dim=2, metric="ip", nlist=2, m=1, nbits=4, nprobe=2)
+    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=2)
     be.train_index(ivfpq_trainset[1])
     be.upsert(ids, X)
 
@@ -252,7 +253,7 @@ def test_faiss_ivfpq_reduces_nlist_and_clamps_nprobe(ivfpq_small_trainset):
     """Cover train_index() branch that rebuilds with smaller nlist and clamps nprobe to nlist."""
     # Start with large nlist, tiny PQ (nbits=2, m=1)
     # so training with small set triggers reduce.
-    vdb = FaissIVFPQ(dim=2, metric="ip", nlist=64, m=1, nbits=2)  # nprobe defaults to 32
+    vdb = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=64, m=1, nbits=2)  # nprobe defaults to 32
 
     _, X = ivfpq_small_trainset
     vdb.train_index(X)

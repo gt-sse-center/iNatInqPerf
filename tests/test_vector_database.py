@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from inatinqperf.adaptors.base import VectorDatabase
+from inatinqperf.adaptors.metric import Metric
 
 
 def test_vectordb_is_abstract():
@@ -120,7 +121,7 @@ def tiny_dataset_fixture():
     return ids, X
 
 
-@pytest.mark.parametrize("metric", ["ip", "l2"])
+@pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
 def test_lifecycle_and_shapes(metric, tiny_dataset):
     ids, X = tiny_dataset
 
@@ -165,7 +166,7 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
 
 def test_upsert_replaces_existing(tiny_dataset):
     ids, X = tiny_dataset
-    db = DummyVectorDatabase(dim=2, metric="ip")
+    db = DummyVectorDatabase(dim=2, metric=Metric.INNER_PRODUCT)
     db.upsert(ids, X)
 
     # Upsert same ids with shifted vectors

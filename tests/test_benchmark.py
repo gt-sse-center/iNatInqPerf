@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from datasets import Dataset
 
+from inatinqperf.adaptors.metric import Metric
 from inatinqperf.benchmark import Benchmarker, benchmark
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
@@ -23,7 +24,7 @@ def _fake_ds_embeddings(n=5, d=4):
 
 
 class DummyVectorDB:
-    def __init__(self, dim, metric="ip", **params):
+    def __init__(self, dim, metric=Metric.INNER_PRODUCT, **params):
         self.dim = dim
         self.metric = metric
         self.params = params
@@ -53,7 +54,11 @@ class DummyVectorDB:
         return D, I
 
     def stats(self):
-        return {"ntotal": self.ntotal, "kind": "dummy", "metric": getattr(self, "metric", "ip")}
+        return {
+            "ntotal": self.ntotal,
+            "kind": "dummy",
+            "metric": str(getattr(self, "metric", "ip")),
+        }
 
 
 def _capture_vectordb(name, dim, init_params):
@@ -154,13 +159,13 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
 
 
 def test_init_vectordb(config_yaml):
-    params = {"metric": "ip", "nlist": 123, "m": 16}
+    params = {"metric": Metric.INNER_PRODUCT, "nlist": 123, "m": 16}
 
     benchmarker = Benchmarker(config_yaml)
     vdb = benchmarker.init_vectordb("faiss.ivfpq", dim=64, init_params=params)
 
     assert vdb.dim == 64
-    assert vdb.metric == "ip"
+    assert vdb.metric == Metric.INNER_PRODUCT
     assert vdb.nlist == 123
     assert vdb.m == 16
 

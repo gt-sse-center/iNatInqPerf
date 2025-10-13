@@ -11,7 +11,6 @@ import tqdm
 import yaml
 from datasets import Dataset
 from loguru import logger
-from tabulate import tabulate
 
 from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import DataPoint, Query, VectorDatabase
@@ -234,7 +233,7 @@ class Benchmarker:
         }
 
         # Make values as lists so `tabulate` can print properly.
-        table = tabulate({k: [v] for k, v in stats.items()}, headers="keys", tablefmt="github")
+        table = get_table(stats)
         logger.info(f"\n\n{table}\n\n")
 
     def update(self, dataset: Dataset, vectordb: VectorDatabase) -> None:

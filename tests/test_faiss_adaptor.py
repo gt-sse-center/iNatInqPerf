@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from inatinqperf.adaptors import faiss_adaptor
-from inatinqperf.adaptors.faiss_adaptor import FaissFlat, FaissIVFPQ
+from inatinqperf.adaptors.faiss_adaptor import Faiss, HuggingFaceDataset, Query, DataPoint
 from inatinqperf.adaptors.metric import Metric
 
 
@@ -14,13 +14,14 @@ def small_data_fixture():
         [
             [1.0, 0.0],
             [0.0, 1.0],
-            [1.0, 1.0],
+            [0.5, 1.0],
             [-1.0, 0.0],
         ],
         dtype=np.float32,
     )
     ids = np.array([100, 101, 102, 103], dtype=np.int64)
-    return ids, X
+    data_dict = {"embedding": X, "id": ids}
+    return HuggingFaceDataset.from_dict(data_dict)
 
 
 @pytest.fixture(name="ivfpq_small_trainset")
@@ -35,9 +36,10 @@ def ivfpq_small_trainset_fixture():
     rng = np.random.default_rng()
     N = 160
     X = rng.standard_normal((N, 2))
-
     ids = np.arange(N)
-    return ids, X
+
+    data_dict = {"embedding": X, "id": ids}
+    return HuggingFaceDataset.from_dict(data_dict)
 
 
 @pytest.fixture(name="ivfpq_trainset")
@@ -46,190 +48,214 @@ def ivfpq_trainset_fixture():
     rng = np.random.default_rng(42)
     X = rng.standard_normal((10240, 2)).astype(np.float32)  # >= 9984
     ids = np.arange(1000, 1000 + X.shape[0], dtype=np.int64)
-    return ids, X
+
+    data_dict = {"embedding": X, "id": ids}
+    return HuggingFaceDataset.from_dict(data_dict)
+
+
+@pytest.fixture(name="query")
+def query_fixture():
+    """Query used for testing the FAISS search."""
+    return Query(vector=[1.0, 0.0])
 
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
-def test_faiss_flat_lifecycle(metric, small_data):
-    ids, X = small_data
-    be = FaissFlat(dim=2, metric=metric)
+def test_faiss_flat_lifecycle(metric, small_data, query):
+    vdb = Faiss(small_data, metric=metric, index_type="FLAT")
 
-    be.upsert(ids, X)
-    st = be.stats()
+    ids = small_data["id"]
+    st = vdb.stats()
     assert st["ntotal"] == len(ids)
 
-    Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
-    D, I = be.search(Q, topk=2)
+    results = vdb.search(query, topk=2)
 
     # shape checks
-    assert D.shape == (2, 2)
-    assert I.shape == (2, 2)
+    assert len(results) == 2
 
-    # nearest to [1,0] should include id 100
-    assert 100 in I[0]
+    # nearest to [1,0] should be id=100
+    assert results[0].id == 100
 
     # delete some ids
-    be.delete([101, 103])
-    assert be.stats()["ntotal"] == 2
-
-    # drop releases index (idempotent)
-    be.drop_index()
-    assert getattr(be, "index", None) is None
+    vdb.delete([101, 103])
+    assert vdb.stats()["ntotal"] == 2
 
 
-def test_faiss_ivfpq_train_and_search_with_large_training(ivfpq_trainset, small_data):
-    _, X_train = ivfpq_trainset
-    ids, X = small_data
-
+def test_faiss_ivfpq_build_and_search_with_large_training(ivfpq_trainset, small_data, query):
     # Use fewer PQ centroids (nbits=4 -> 16) so 300 training points suffice without warnings
-    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=2)
-
-    # training on sufficient dataset (silence FAISS native stderr warnings)
-    be.train_index(X_train)
+    vdb = Faiss(
+        ivfpq_trainset, metric=Metric.INNER_PRODUCT, index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=2
+    )
 
     # upsert a small, known set for deterministic checks
-    be.upsert(ids, X)
+    ids = small_data["id"]
+    X = small_data["embedding"]
+    datapoints = [DataPoint(id=id, vector=vector, metadata={}) for id, vector in zip(ids, X)]
+    vdb.upsert(datapoints)
 
-    s = be.stats()
+    s = vdb.stats()
     assert s["kind"] == "ivfpq"
     assert "nlist" in s
     assert "nprobe" in s
 
-    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
-    D, I = be.search(Q, topk=2)
+    results = vdb.search(query, topk=2)
 
     # shapes
-    assert D.shape == (2, 2)
-    assert I.shape == (2, 2)
+    assert len(results) == 2
     # ids returned should come from our set (since they are much closer than random train points)
-    assert set(I.flatten()).issubset(set(ids))
+    assert results[0].id == 100
+    assert results[1].id == 101
 
     # delete works and stats update
-    be.delete([100])
-    assert be.stats()["ntotal"] == len(ids) - 1
-
-    # drop releases resources
-    be.drop_index()
-    assert getattr(be, "index", None) is None
+    vdb.delete([100])
+    assert vdb.stats()["ntotal"] == len(ids) - 1
 
 
-def test_faiss_ivfpq_l2_metric_delete_and_drop(ivfpq_trainset, small_data):
-    _, X_train = ivfpq_trainset
-    ids, X = small_data
-
+def test_faiss_ivfpq_l2_metric_delete(ivfpq_trainset, small_data, query):
     # Fewer centroids to prevent FAISS training warnings
-    be = FaissIVFPQ(dim=2, metric="l2", nlist=2, m=1, nbits=4, nprobe=2)
-    be.train_index(X_train)
-    be.upsert(ids, X)
+    vdb = Faiss(ivfpq_trainset, metric="l2", index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=2)
+
+    ids = small_data["id"]
+    X = small_data["embedding"]
+    datapoints = [DataPoint(id=id, vector=vector, metadata={}) for id, vector in zip(ids, X)]
+    vdb.upsert(datapoints)
 
     # Search with L2 metric; still expect small_data ids to appear
-    Q = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
     # Increase nprobe to improve recall; ANN may otherwise return fewer than topk hits (filled with -1)
-    D, I = be.search(Q, topk=3, nprobe=64)
-    assert D.shape == (2, 3)
-    assert I.shape == (2, 3)
-    valid = I[I >= 0]  # filter out FAISS "no result" slots
-    assert set(valid.flatten()).issubset(set(ids))
+    results = vdb.search(query, topk=3, nprobe=64)
+    assert len(results) == 3
 
-    # Deleting non-existent id should not raise
-    be.delete([999])
+    # filter out FAISS "no result" slots
+    valid = [result.id for result in results if result.id >= 0]
+    assert set(valid).issubset(set(ids))
+
+    # Deleting non-existent ID should not raise an exception
+    try:
+        vdb.delete([999])
+    except Exception:
+        pytest.fail("faiss.ivfpq delete raised an exception.")
 
     # Delete existing and verify
-    be.delete([101])
-    assert be.stats()["ntotal"] == len(ids) - 1
-
-    # Drop twice to exercise idempotency
-    be.drop_index()
-    be.drop_index()
-    assert getattr(be, "index", None) is None
+    vdb.delete([101])
+    assert vdb.stats()["ntotal"] == len(ids) - 1
 
 
-def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, small_data):
+def test_faiss_ivfpq_runtime_nprobe_override_and_upsert_replace(ivfpq_trainset, small_data, query):
     """Cover runtime nprobe override branch and upsert replacement semantics for IVFPQ."""
-    _, X_train = ivfpq_trainset
-    ids, X = small_data
 
-    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=1)
-    be.train_index(X_train)
+    vdb = Faiss(
+        ivfpq_trainset, metric=Metric.INNER_PRODUCT, index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=1
+    )
 
     # First insert
-    be.upsert(ids, X)
-    nt1 = be.stats()["ntotal"]
+    ids = small_data["id"]
+    X = small_data["embedding"]
+    datapoints = [DataPoint(id=id, vector=vector, metadata={}) for id, vector in zip(ids, X)]
+    vdb.upsert(datapoints)
+
+    nt1 = vdb.stats()["ntotal"]
 
     # Upsert same ids with slightly shifted vectors (replacement semantics)
-    be.upsert(ids, X + 0.01)
-    nt2 = be.stats()["ntotal"]
+    X2 = (np.asarray(X) + 0.01).tolist()
+    datapoints = [DataPoint(id=id, vector=vector, metadata={}) for id, vector in zip(ids, X2)]
+    vdb.upsert(datapoints)
+
+    nt2 = vdb.stats()["ntotal"]
     assert nt2 == nt1  # replaced, not duplicated
 
     # Force a very small and a larger nprobe to exercise the branch
-    Q = np.array([[1.0, 0.0]], dtype=np.float32)
-    D1, I1 = be.search(Q, topk=3, nprobe=1)
-    D2, I2 = be.search(Q, topk=3, nprobe=64)
+    results1 = vdb.search(query, topk=3, nprobe=1)
+    results2 = vdb.search(query, topk=3, nprobe=64)
 
-    assert D1.shape == D2.shape == (1, 3)
-    assert I1.shape == I2.shape == (1, 3)
-
-    be.drop_index()
+    assert len(results1) == len(results2) == 3
 
 
 def test_faiss_flat_topk_greater_than_ntotal_and_idempotent_delete(small_data):
     """Cover branch where topk > ntotal and deleting non-existent IDs is a no-op."""
-    ids, X = small_data
-    be = FaissFlat(dim=2, metric=Metric.INNER_PRODUCT)
-    be.upsert(ids, X)
+    be = Faiss(small_data, metric=Metric.INNER_PRODUCT, index_type="FLAT")
 
-    Q = np.array([[0.2, 0.9]], dtype=np.float32)
+    q = Query(vector=[0.2, 0.9])
     # Ask for more neighbors than we have to ensure code handles it
-    D, I = be.search(Q, topk=10)
-    assert D.shape == (1, 10)
-    assert I.shape == (1, 10)
+    results = be.search(q, topk=10)
+    assert len(results) == 10
 
     # Deleting IDs that do not exist should not raise and should keep counts stable
     nt_before = be.stats()["ntotal"]
     be.delete([999, 1000])
     assert be.stats()["ntotal"] == nt_before
 
-    be.drop_index()
-    be.drop_index()
-    assert getattr(be, "index", None) is None
-
 
 def test_metric_mapping_and_unwrap_real_index(ivfpq_trainset, small_data):
     # Build a real IVFPQ index and ensure unwrap hits the IVF layer
-    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=2)
-    be.train_index(ivfpq_trainset[1])
+    be = Faiss(
+        ivfpq_trainset, metric=Metric.INNER_PRODUCT, index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=2
+    )
 
     ivf = faiss_adaptor._unwrap_to_ivf(be.index.index)
     assert ivf is not None and hasattr(ivf, "nlist")
-    be.drop_index()
 
 
-def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data):
+def test_faiss_ivfpq_cosine_metric_and_topk_gt_ntotal(ivfpq_trainset, small_data, query):
     # Cosine path should map to inner-product internally
-    ids, X = small_data
-    be = FaissIVFPQ(dim=2, metric="cosine", nlist=2, m=1, nbits=4, nprobe=2)
-    be.train_index(ivfpq_trainset[1])
-    be.upsert(ids, X)
+    vdb = Faiss(ivfpq_trainset, metric="cosine", index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=2)
 
-    Q = np.array([[1.0, 0.0]], dtype=np.float32)
+    ids = small_data["id"]
+    X = small_data["embedding"]
+    datapoints = [DataPoint(id=id, vector=vector, metadata={}) for id, vector in zip(ids, X)]
+    vdb.upsert(datapoints)
+
     # Ask for more neighbors than exist; FAISS may pad with -1
-    D, I = be.search(Q, topk=10, nprobe=64)
-    assert D.shape == (1, 10) and I.shape == (1, 10)
-    valid = I[I >= 0]
-    assert set(valid.flatten()).issubset(set(ids))
-    be.drop_index()
+    results = vdb.search(query, topk=10, nprobe=64)
+    assert len(results) == 10
+
+    valid = [result.id for result in results if result.id >= 0]
+    assert set(valid).issubset(set(ids))
 
 
 def test_faiss_ivfpq_empty_delete_noop(ivfpq_trainset, small_data):
-    ids, X = small_data
-    be = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=2, m=1, nbits=4, nprobe=2)
-    be.train_index(ivfpq_trainset[1])
-    be.upsert(ids, X)
+    vdb = Faiss(
+        ivfpq_trainset, metric=Metric.INNER_PRODUCT, index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=2
+    )
+
+    ids = small_data["id"]
+    X = small_data["embedding"]
+    datapoints = [DataPoint(id=id, vector=vector, metadata={}) for id, vector in zip(ids, X)]
+    vdb.upsert(datapoints)
 
     # Empty delete should be a no-op
-    be.delete([])
-    assert be.stats()["ntotal"] == len(ids)
-    be.drop_index()
+    vdb.delete([])
+    assert vdb.stats()["ntotal"] == len(ids)
+
+
+def test_query_edge_cases(ivfpq_trainset):
+    """Test various query edge cases."""
+    vdb = Faiss(
+        ivfpq_trainset, metric=Metric.INNER_PRODUCT, index_type="IVFPQ", nlist=2, m=1, nbits=4, nprobe=2
+    )
+
+    topk = 5
+
+    # empty query vector
+    q0 = Query(vector=[])
+    with pytest.raises(ValueError):
+        vdb.search(q0, topk)
+
+    # zeros query vector
+    q1 = Query(vector=[0, 0])
+    vdb.search(q1, topk)
+
+    # inf query vector
+    q1 = Query(vector=[-np.inf, np.inf])
+    vdb.search(q1, topk)
+
+    # smaller query vector
+    q2 = Query(vector=[1])
+    with pytest.raises(ValueError):
+        vdb.search(q2, topk)
+
+    # larger query vector
+    q3 = Query(vector=[1, 2, 3])
+    with pytest.raises(ValueError):
+        vdb.search(q3, topk)
 
 
 def test_unwrap_fallback_dummy_chain():
@@ -253,10 +279,11 @@ def test_faiss_ivfpq_reduces_nlist_and_clamps_nprobe(ivfpq_small_trainset):
     """Cover train_index() branch that rebuilds with smaller nlist and clamps nprobe to nlist."""
     # Start with large nlist, tiny PQ (nbits=2, m=1)
     # so training with small set triggers reduce.
-    vdb = FaissIVFPQ(dim=2, metric=Metric.INNER_PRODUCT, nlist=64, m=1, nbits=2)  # nprobe defaults to 32
+    vdb = Faiss(
+        ivfpq_small_trainset, metric=Metric.INNER_PRODUCT, index_type="IVFPQ", nlist=64, m=1, nbits=2
+    )  # nprobe defaults to 32
 
-    _, X = ivfpq_small_trainset
-    vdb.train_index(X)
+    X = np.asarray(ivfpq_small_trainset["embedding"])
 
     s = vdb.stats()
     assert s["kind"] == "ivfpq"

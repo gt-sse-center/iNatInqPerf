@@ -41,6 +41,8 @@ class PretrainedCLIPModel:
         self.device = self.get_device()
         self.proc = CLIPProcessor.from_pretrained(model_id, use_fast=False)
         self.model = CLIPModel.from_pretrained(model_id).to(self.device)
+        # Get the embedding dimension from the model config
+        self.embedding_dim: int = self.model.config.projection_dim
 
     @staticmethod
     def get_device() -> str:
@@ -54,9 +56,9 @@ class PretrainedCLIPModel:
 
     def __call__(
         self,
-        images: np.ndarray | None = None,
-        text: np.ndarray | None = None,
-    ) -> torch.Tensor:
+        images: list[Image.Image] | None = None,
+        text: list[str] | None = None,
+    ) -> np.ndarray:
         """Forward pass of either image or text data."""
         if images is not None:
             inputs = self.proc(images=images, return_tensors="pt", padding=True).to(self.device)
@@ -67,12 +69,14 @@ class PretrainedCLIPModel:
             feats = self.model.get_text_features(**inputs)
 
         else:
-            raise ValueError("Neither image nor text data provided.")  # noqa: TRY003,EM101
+            msg = "Neither image nor text data provided."
+            raise ValueError(msg)
 
-        return torch.nn.functional.normalize(feats, p=2, dim=1)
+        normalized_feats = torch.nn.functional.normalize(feats, p=2, dim=1)
+        return normalized_feats.cpu().numpy().astype(np.float32)
 
 
-def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEmbeddings:
+def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> ImageDatasetWithEmbeddings:
     """Embed images from a dataset on disk using a CLIP model."""
     ds = load_from_disk(raw_dir)
 
@@ -80,20 +84,21 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
 
     imgs = [pilify(r["image"]) for r in ds]
 
-    all_emb, ids, labels = [], [], []
-    for i in tqdm.tqdm(range(0, len(imgs), batch)):
-        batch_imgs = imgs[i : i + batch]
+    embeddings, ids, labels = [], [], []
+    for i in tqdm.tqdm(range(0, len(imgs), batch_size)):
+        batch_imgs = imgs[i : i + batch_size]
         with torch.no_grad():
             feats = model(images=batch_imgs)
-            all_emb.append(feats.cpu().numpy().astype(np.float32))
+            embeddings.append(feats)
 
         ids.extend([i + j for j in range(len(batch_imgs))])
         labels.extend(
             [int(ds[i + j].get("label", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
         )
 
-    if all_emb:
-        x = np.concatenate(all_emb, axis=0)
+    if embeddings:
+        x = np.concatenate(embeddings, axis=0)
+
     else:
         config = getattr(model, "config", None)
         dim = 0
@@ -105,6 +110,20 @@ def embed_images(raw_dir: Path, model_id: str, batch: int) -> ImageDatasetWithEm
         x = np.empty((0, max(dim, 0)), dtype=np.float32)
 
     return ImageDatasetWithEmbeddings(x, ids, np.asarray(labels))
+
+
+def embed_text(queries: list[str], model_id: str, batch_size: int = 128) -> np.ndarray:
+    """Embed text queries using a CLIP model."""
+    model = PretrainedCLIPModel(model_id=model_id)
+
+    feats = np.empty((len(queries), model.embedding_dim), dtype=np.float32)
+    with torch.no_grad():
+        for i in range(0, len(queries), batch_size):
+            batch_queries = queries[i : i + batch_size]
+            batch_feats = model(text=batch_queries)
+            feats[i : i + batch_feats.shape[0]] = batch_feats
+
+    return feats
 
 
 def to_huggingface_dataset(
@@ -142,13 +161,3 @@ def to_huggingface_dataset(
         },
         features=feats,
     )
-
-
-def embed_text(queries: list[str], model_id: str) -> np.ndarray:
-    """Embed text queries using a CLIP model."""
-    model = PretrainedCLIPModel(model_id=model_id)
-
-    with torch.no_grad():
-        feats = model(text=queries)
-
-    return feats.cpu().numpy().astype(np.float32)

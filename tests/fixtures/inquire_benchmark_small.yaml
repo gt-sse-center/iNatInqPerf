@@ -10,9 +10,10 @@ embedding:
   directory: data/inquire_benchmark/emb
 
 vectordb:
-  type: faiss.ivfpq
+  type: faiss
   params:
     metric: ip
+    index_type: IVFPQ
     nlist: 32768
     m: 64
     nbits: 2

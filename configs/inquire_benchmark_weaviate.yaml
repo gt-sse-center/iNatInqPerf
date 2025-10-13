@@ -10,9 +10,10 @@ embedding:
   directory: data/inquire_benchmark/emb
 
 vectordb:
-  type: weaviate.hnsw
+  type: weaviate
   params:
     metric: cosine
+    index_type: HNSW
     base_url: http://localhost:8080
     class_name: InatinqperfBenchmark
     timeout: 30

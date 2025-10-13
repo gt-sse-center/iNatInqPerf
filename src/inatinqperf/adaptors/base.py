@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import numpy as np
 from datasets import Dataset as HuggingFaceDataset
 
+from inatinqperf.adaptors.metric import Metric
+
 
 @dataclass
 class DataPoint:
@@ -55,7 +57,8 @@ class VectorDatabase(ABC):
             *args (Sequence[object]): Optional positional arguments.
             **kwargs (dict[object, object]): Optional key-word arguments.
         """
-        self.metric = metric
+        # Will raise exception if `metric` is not valid.
+        self.metric = Metric(metric)
         self.dim = np.asarray(dataset["embedding"]).shape[1]
 
     @abstractmethod

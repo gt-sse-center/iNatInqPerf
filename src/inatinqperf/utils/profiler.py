@@ -35,6 +35,7 @@ class Profiler:
 
         self._t0 = None
         self._cpu0 = None
+        self.metrics = {}
 
     def __enter__(self) -> "Profiler":
         """Start profiling context."""
@@ -64,7 +65,7 @@ class Profiler:
         rss_avg = (sum(self.rss_samples) / len(self.rss_samples) / (1024 * 1024)) if self.rss_samples else 0.0
         rss_max = (max(self.rss_samples) / (1024 * 1024)) if self.rss_samples else 0.0
 
-        metrics = {
+        self.metrics = {
             "step": self.step,
             "wall_time_sec": round(wall, 4),
             "cpu_time_sec": round(cpu, 4),
@@ -78,6 +79,6 @@ class Profiler:
         path = self.results_dir / f"step-{self.step}-{ts}.json"
 
         with path.open("w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(self.metrics, f, indent=2)
 
-        logger.info(f"[PROFILE] {metrics}")  # noqa: G004
+        logger.info(f"[PROFILE] {self.metrics}")  # noqa: G004

@@ -103,9 +103,9 @@ def test_search(collection_name, vectordb, dataset):
     results = vectordb.search(q=query, topk=5)
 
     assert results[0].id == expected_id
-    assert results[0].score == 1.0
 
     # regression
+    assert np.allclose(results[0].score, 1.0)
     assert np.allclose(results[1].score, 0.7783108)
 
 

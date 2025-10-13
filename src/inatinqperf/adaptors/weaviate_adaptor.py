@@ -11,7 +11,11 @@ import requests
 from loguru import logger
 from requests import Response, Session
 
+<<<<<<< HEAD
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
+=======
+from inatinqperf.adaptors.base import SearchResult, VectorDatabase
+>>>>>>> d4f43a2 (update weaviate search)
 from inatinqperf.adaptors.metric import Metric
 
 
@@ -68,10 +72,16 @@ class Weaviate(VectorDatabase):
     # ------------------------------------------------------------------
     # VectorDatabase implementation
     # ------------------------------------------------------------------
+<<<<<<< HEAD
     def _configure(self) -> None:
         """Ensure that the Weaviate class exists before ingesting data."""
         self.check_ready()
 
+=======
+    def train_index(self, x_train: np.ndarray) -> None:  # noqa: ARG002 - interface contract
+        """Ensure that the Weaviate class exists before ingest."""
+        self.check_ready()
+>>>>>>> d4f43a2 (update weaviate search)
         if self._class_exists():
             return
 
@@ -145,12 +155,17 @@ class Weaviate(VectorDatabase):
             if response.status_code not in {200, 201}:
                 self._raise_error("failed to upsert object", response)
 
+<<<<<<< HEAD
     def search(self, q: Query, topk: int, **_: object) -> Sequence[SearchResult]:
+=======
+    def search(self, q: np.ndarray, topk: int, **_: object) -> Sequence[SearchResult]:
+>>>>>>> d4f43a2 (update weaviate search)
         """Run nearest-neighbor search using GraphQL."""
         if topk <= 0:
             msg = "topk must be positive"
             raise ValueError(msg)
 
+<<<<<<< HEAD
         query_vector = np.asarray(q.vector, dtype=np.float32)
 
         if query_vector.ndim > 1 or query_vector.shape[0] != self.dim:
@@ -158,6 +173,13 @@ class Weaviate(VectorDatabase):
             raise ValueError(msg)
 
         vector_json = json.dumps(query_vector.tolist())
+=======
+        if q.ndim > 1 or q.shape[0] != self.dim:
+            msg = "Query vectors must be 1-D with correct dimensionality"
+            raise ValueError(msg)
+
+        vector_json = json.dumps(q.tolist())
+>>>>>>> d4f43a2 (update weaviate search)
         query_str = (
             "{\n  Get {\n    "
             f"{self.class_name}(nearVector: {{ vector: {vector_json} }}, limit: {topk}) "

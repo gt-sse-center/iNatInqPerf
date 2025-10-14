@@ -65,6 +65,7 @@ dev = [
     "pytest-loguru>=0.4.0",
     "ruff>=0.13.0",
     "docker>=7.1.0",
+    "pytest-mock>=3.15.1",
 ]
 
 [tool.pytest.ini_options]
@@ -73,13 +74,6 @@ norecursedirs = [
     "tests/vectordbs",
 ]
 
-[tool.scripts]
-download = "python src/benchmark/benchmark.py download"
-embed = "python src/benchmark/benchmark.py embed"
-build = "python src/benchmark/benchmark.py build"
-search = "python src/benchmark/benchmark.py search"
-update = "python src/benchmark/benchmark.py update"
-run-all = "python src/benchmark/benchmark.py run-all --size small --backend faiss.flat"
 
 [tool.ruff]
 line-length = 110
@@ -93,6 +87,7 @@ ignore = [
     "ANN002", # Missing type annotation for `*args`
     "ANN003", # Missing type annotation for `**kwargs`
     "BLE001", # Do not catch blind exception: `Exception`
+    "B905", # `zip()` without an explicit `strict=` parameter
     "COM812", # Trailing comma missing
     "D105", # Missing docstring in magic method
     "D107", # Missing docstring in `__init__` method
@@ -107,6 +102,7 @@ ignore = [
     "TD002", # Missing author in TODO
     "TD003", # Missing issue link for this TODO
     "TRY002", # Create your own exception
+    "TRY003", # Avoid specifying long messages outside the exception class
     "TRY300", # Consider moving this statement to an `else` block
 ]
 

@@ -11,13 +11,16 @@ from types import TracebackType
 import psutil
 from loguru import logger
 
+# Set logger to record the calling function in the profiler
+logger = logger.opt(depth=1)
+
 
 class Profiler:
     """Lightweight in-process profiler.
 
       - wall_time_sec, cpu_time_sec
       - Python heap peak (tracemalloc)
-      - rss_avg_mb, rss_max_mb (process RSS snapshots)
+      - rss_avg_mb, rss_max_mb (process Resident Set Size aka `RSS` snapshots)
 
     For CPU flamegraphs, run the command via py-spy externally.
     """
@@ -78,4 +81,4 @@ class Profiler:
         with path.open("w", encoding="utf-8") as f:
             json.dump(self.metrics, f, indent=2)
 
-        logger.info(f"[PROFILE] {self.metrics}")
+        logger.info(f"[PROFILE] {self.metrics}")  # noqa: G004

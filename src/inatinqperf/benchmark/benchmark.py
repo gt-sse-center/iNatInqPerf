@@ -14,8 +14,8 @@ from datasets import Dataset
 from loguru import logger
 
 from inatinqperf.adaptors import VECTORDBS
-from inatinqperf.adaptors.base import VectorDatabase
-from inatinqperf.adaptors.faiss_adaptor import FaissFlat
+from inatinqperf.adaptors.base import DataPoint, Query, VectorDatabase
+from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
 from inatinqperf.utils.embed import (
@@ -38,7 +38,8 @@ class Benchmarker:
             base_path (Path | None, optional): The path to which all data will be saved.
                 If None, it will be set to the root directory of the project.
         """
-        logger.info(f"Loading config: {config_file}")
+        logger.patch(lambda r: r.update(function="constructor")).info(f"Loading config: {config_file}")
+
         with config_file.open("r") as f:
             cfg = yaml.safe_load(f)
         # Load into Config class to validate properties
@@ -87,6 +88,7 @@ class Benchmarker:
         batch_size = self.cfg.embedding.batch_size
 
         dataset_dir = self.base_path / self.cfg.dataset.directory
+        logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
         with Profiler("embed-images"):
             dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
@@ -111,30 +113,20 @@ class Benchmarker:
 
         logger.info(f"Embeddings: {dse.embeddings.shape} -> {embeddings_dir}")
 
-        return huggingface_dataset
-
-    @staticmethod
-    def init_vectordb(vdb_type: str, dim: int, init_params: dict[str, Any]) -> VectorDatabase:
-        """Initialize vector database."""
-        return VECTORDBS[vdb_type](dim=dim, **init_params)
+        return huggingface_dataset.with_format("numpy")
 
     def build(self, dataset: Dataset) -> VectorDatabase:
         """Build index for the specified vectordb."""
         vdb_type = self.cfg.vectordb.type
+        logger.info(f"Building {vdb_type} vector database")
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
-        ids = np.array(dataset["id"], dtype=np.int64)
-
-        logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
+
         if vdb_type.startswith("weaviate"):
             self._validate_weaviate_params(init_params)
-        vdb = self.init_vectordb(vdb_type, x.shape[1], init_params=init_params)
 
         with Profiler(f"build-{vdb_type}"):
-            # training if needed
-            vdb.train_index(x)
-            vdb.upsert(ids, x)
+            vdb = VECTORDBS[vdb_type](dataset, **init_params)
 
         logger.info(f"Stats: {vdb.stats()}")
 
@@ -175,16 +167,10 @@ class Benchmarker:
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
-        x = np.stack(dataset["embedding"]).astype(np.float32)
         metric = self.cfg.vectordb.params.metric.lower()
 
         # Create exact baseline
-        d = x.shape[1]
-
-        faiss_flat_db = FaissFlat(dim=d, metric=metric)
-        ids = np.arange(x.shape[0], dtype=np.int64)
-        faiss_flat_db.upsert(ids=ids, x=x)
-
+        faiss_flat_db = Faiss(dataset, metric=metric, index_type="FLAT")
         logger.info("Created exact baseline index")
 
         return faiss_flat_db
@@ -193,8 +179,6 @@ class Benchmarker:
         """Profile search and compute recall@K vs exact baseline."""
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
-
-        x = np.stack(dataset["embedding"]).astype(np.float32)
 
         topk = self.cfg.search.topk
 
@@ -210,29 +194,41 @@ class Benchmarker:
         q = embed_text(queries, model_id)
         logger.info("Embedded all queries")
 
-        # search + profile
-        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
-            lat = []
-            _, i0 = baseline_vectordb.search(q, topk)  # exact
+        logger.info("Performing search on baseline")
+        with Profiler("search-baseline-FaissFlat") as p:
+            i0 = np.empty((q.shape[0], topk), dtype=float)
+            for i in tqdm.tqdm(range(q.shape[0])):
+                base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
+                i0[i] = np.asarray([r.id for r in base_results])
 
+        # search + profile
+        logger.info(f"Performing search on {self.cfg.vectordb.type}")
+        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
+            latencies = []
             for i in tqdm.tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
-                _, _ = vectordb.search(q[i : i + 1], topk, **params.to_dict())
-                lat.append((time.perf_counter() - t0) * 1000.0)
+                vectordb.search(Query(q[i]), topk, **params.to_dict())
+                latencies.append((time.perf_counter() - t0) * 1000.0)
 
             p.sample()
 
         # recall@K (compare last retrieved to baseline per query)
         # For simplicity compute approximate on whole Q at once:
-        _, i1 = vectordb.search(q, topk, **params.to_dict())
+        i1 = np.empty((q.shape[0], topk), dtype=float)
+        for i in tqdm.tqdm(range(q.shape[0])):
+            results = vectordb.search(Query(q[i]), topk, **params.to_dict())
+            i1[i] = np.asarray([r.id for r in results])
         rec = recall_at_k(i1, i0, topk)
+
+        x = np.asarray(dataset["embedding"], dtype=np.float32)
 
         stats = {
             "vectordb": self.cfg.vectordb.type,
+            "index_type": self.cfg.vectordb.params.index_type,
             "topk": topk,
-            "lat_ms_avg": float(np.mean(lat)),
-            "lat_ms_p50": float(np.percentile(lat, 50)),
-            "lat_ms_p95": float(np.percentile(lat, 95)),
+            "lat_ms_avg": float(np.mean(latencies)),
+            "lat_ms_p50": float(np.percentile(latencies, 50)),
+            "lat_ms_p95": float(np.percentile(latencies, 95)),
             "recall@k": rec,
             "ntotal": int(x.shape[0]),
         }
@@ -246,23 +242,23 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.asarray(dataset["embedding"], dtype=np.float32)
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)
         add_vecs = x[:add_n].copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
-        add_vecs /= np.linalg.norm(add_vecs, axis=1, keepdims=True) + 1e-9
-        add_ids = np.arange(10_000_000, 10_000_000 + add_n, dtype=np.int64)
+        add_ids = list(range(add_n))
 
         with Profiler(f"update-add-{vdb_type}"):
-            vectordb.upsert(add_ids, add_vecs)
+            data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]
+            vectordb.upsert(data_points)
 
         with Profiler(f"update-delete-{vdb_type}"):
-            del_ids = list(add_ids[:del_n])
+            del_ids = add_ids[:del_n]
             vectordb.delete(del_ids)
 
-        logger.info("Update complete.", vectordb.stats())
+        logger.info(f"Update complete: {vectordb.stats()}")
 
     def run(self) -> None:
         """Run end-to-end benchmark with all steps."""

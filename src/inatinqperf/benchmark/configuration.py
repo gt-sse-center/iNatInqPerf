@@ -31,7 +31,8 @@ class EmbeddingParams(BaseModel):
 class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
-    metric: Metric | None
+    metric: Metric
+    index_type: NonEmptyStr
     model_config = ConfigDict(extra="allow")
     nlist: int | None = None
     m: int | None = None

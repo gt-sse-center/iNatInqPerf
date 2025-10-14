@@ -1,20 +1,16 @@
 """Lightweight in-process profiler."""
 
-from __future__ import annotations
-
 import datetime
 import json
 import os
 import time
 import tracemalloc
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean
-from typing import TYPE_CHECKING, Any, Self
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from types import TracebackType
+from types import TracebackType
+from typing import Any, Self
 
 import psutil
 from loguru import logger
@@ -286,6 +282,7 @@ class Profiler:
     # Internal helpers
     # ------------------------------------------------------------------
     def _sample_containers(self) -> None:
+        """Poll registered containers and record a point-in-time sample."""
         if self._pending_containers:
             for ref in list(self._pending_containers):
                 container_obj = self._resolve_container(ref)
@@ -305,11 +302,13 @@ class Profiler:
             tracker.sample()
 
     def _summarise_containers(self) -> list[dict[str, Any]]:
+        """Aggregate the collected container snapshots into metric summaries."""
         if not self._container_trackers:
             return []
         return [tracker.summary() for tracker in self._container_trackers.values()]
 
     def _resolve_container(self, container: Container | str) -> Container | None:
+        """Resolve a container handle or identifier to a docker container object."""
         if getattr(container, "stats", None):
             return container  # Already a container-like object injected by caller.
 
@@ -328,6 +327,7 @@ class Profiler:
         return None
 
     def _ensure_docker_client(self) -> docker.DockerClient | None:
+        """Return a cached docker client, creating it when necessary."""
         if self._docker_client is not None:
             return self._docker_client
         if docker is None:

@@ -1,4 +1,4 @@
-"""Unit tests for the Weaviate adaptor using stubbed HTTP sessions."""
+"""Unit tests for the Weaviate adaptor using a stubbed client."""
 
 from collections import defaultdict
 import uuid
@@ -8,6 +8,9 @@ import requests
 from unittest import mock
 import pytest
 
+from datasets import Dataset
+
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult
 from inatinqperf.adaptors.metric import Metric
 from inatinqperf.adaptors.weaviate_adaptor import (
     Weaviate,
@@ -18,16 +21,12 @@ from inatinqperf.adaptors.weaviate_adaptor import (
 )
 
 
-class FakeResponse:
-    """Lightweight stand-in for requests.Response with JSON payload support."""
+class FakeStatusError(Exception):
+    """Mimic weaviate exceptions that surface HTTP status codes."""
 
-    def __init__(self, status_code: int = 200, json_data: dict | None = None, text: str = "") -> None:
+    def __init__(self, status_code: int, message: str = "") -> None:
+        super().__init__(message or f"status {status_code}")
         self.status_code = status_code
-        self._json = json_data or {}
-        self.text = text
-
-    def json(self) -> dict:
-        return self._json
 
 
 class MockSession:
@@ -167,7 +166,7 @@ def test_stats_returns_count(adaptor, mocker):
 
     stats = adaptor.stats()
     assert stats["ntotal"] == 5
-    assert stats["class_name"] == "TestClass"
+    assert stats["class_name"] == adaptor.class_name
 
 
 def test_stats_handles_graphql_error(adaptor, mocker):
@@ -345,12 +344,12 @@ def test_search_raises_on_bad_status(mocker, adaptor):
 def test_search_handles_invalid_uuid_fallback(mocker, adaptor):
     """Invalid UUIDs should fall back to -1 identifiers without crashing."""
 
-    def graphql_payload(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            data = {
-                "data": {
-                    "Get": {adaptor.class_name: [{"_additional": {"id": "not-a-uuid", "distance": 0.2}}]}
-                }
+    client.graphql_get_response = {
+        "data": {
+            "Get": {
+                adaptor.class_name: [
+                    {"_additional": {"id": "not-a-uuid", "distance": 0.2}},
+                ]
             }
             return FakeResponse(200, data)
         return FakeResponse(200)

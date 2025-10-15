@@ -10,7 +10,7 @@ embedding:
   directory: data/inquire_benchmark/emb
 
 vectordb:
-  type: weaviate
+  type: weaviate.hnsw
   params:
     metric: cosine
     index_type: HNSW

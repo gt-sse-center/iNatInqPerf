@@ -201,6 +201,13 @@ class Weaviate(VectorDatabase):
         try:
             data = builder.do()
         except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
+                logger.warning(
+                    "[WeaviateAdaptor] search requested before schema exists (class=%s).",
+                    self.class_name,
+                )
+                return []
             self._handle_exception("search request failed", exc)
 
         results = self._extract_results(data)
@@ -217,6 +224,19 @@ class Weaviate(VectorDatabase):
         try:
             data = self._client.query.aggregate(self.class_name).with_meta_count().do()
         except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
+                logger.warning(
+                    "[WeaviateAdaptor] stats requested before schema exists (class=%s).",
+                    self.class_name,
+                )
+                return {
+                    "ntotal": 0,
+                    "metric": self._metric.value,
+                    "class_name": self.class_name,
+                    "base_url": self.base_url,
+                    "dim": self.dim,
+                }
             self._handle_exception("failed to fetch stats", exc)
 
         count = self._extract_count(data)

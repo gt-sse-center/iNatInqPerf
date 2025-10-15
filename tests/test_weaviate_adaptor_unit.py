@@ -395,6 +395,12 @@ def test_stats_handles_empty_entries(mocker, adaptor):
 def test_constructor_and_distance_mapping(dataset):
     """Ensure basic constructor validation and metric mapping."""
     adaptor_ip = Weaviate(dataset, metric=Metric.INNER_PRODUCT)
+<<<<<<< HEAD
+    assert adaptor_ip.distance_metric == "dot"
+
+    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
+=======
+>>>>>>> a08ee52 (Update weaviate adaptor and its unit tests)
     assert adaptor_ip.distance_metric == "dot"
 
     adaptor_l2 = Weaviate(dataset, metric=Metric.L2)

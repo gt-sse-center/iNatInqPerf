@@ -145,12 +145,12 @@ class Weaviate(VectorDatabase):
             if response.status_code not in {200, 201}:
                 self._raise_error("failed to upsert object", response)
 
+
     def search(self, q: Query, topk: int, **_: object) -> Sequence[SearchResult]:
         """Run nearest-neighbor search using GraphQL."""
         if topk <= 0:
             msg = "topk must be positive"
             raise ValueError(msg)
-
         query_vector = np.asarray(q.vector, dtype=np.float32)
 
         if query_vector.ndim > 1 or query_vector.shape[0] != self.dim:
@@ -158,6 +158,12 @@ class Weaviate(VectorDatabase):
             raise ValueError(msg)
 
         vector_json = json.dumps(query_vector.tolist())
+
+        if q.ndim > 1 or q.shape[0] != self.dim:
+            msg = "Query vectors must be 1-D with correct dimensionality"
+            raise ValueError(msg)
+
+        vector_json = json.dumps(q.tolist())
         query_str = (
             "{\n  Get {\n    "
             f"{self.class_name}(nearVector: {{ vector: {vector_json} }}, limit: {topk}) "

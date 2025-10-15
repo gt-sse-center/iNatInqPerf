@@ -87,6 +87,8 @@ select = ["ALL"]
 ignore = [
     "ANN002", # Missing type annotation for `*args`
     "ANN003", # Missing type annotation for `**kwargs`
+    "B905", # `strict` in zip
+    "BLE001", # Do not catch blind exception: `Exception`
     "B905", # `zip()` without an explicit `strict=` parameter
     "BLE001", # Do not catch blind exception: `Exception`
     "COM812", # Trailing comma missing

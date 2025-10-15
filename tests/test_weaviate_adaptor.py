@@ -134,9 +134,7 @@ def to_datapoints(ids: np.ndarray, vectors: np.ndarray) -> list[DataPoint]:
 
 def test_weaviate_adaptor_lifecycle(class_name: str):
     """Exercise the full lifecycle against a live Weaviate instance."""
-    adaptor = Weaviate(
-        dataset=make_dataset(4), metric=Metric.COSINE, base_url=BASE_URL, class_name=class_name
-    )
+    adaptor = Weaviate(dataset=make_dataset(4), metric=Metric.COSINE, url=BASE_URL, class_name=class_name)
     adaptor.drop_index()  # ensure clean start
 
     train = np.random.default_rng(7).standard_normal((8, 4)).astype(np.float32)
@@ -177,9 +175,7 @@ def test_weaviate_adaptor_lifecycle(class_name: str):
 
 def test_weaviate_upsert_replaces_vectors(class_name: str):
     """Verify upsert overwrites existing vectors rather than duplicating them."""
-    adaptor = Weaviate(
-        dataset=make_dataset(3), metric=Metric.COSINE, base_url=BASE_URL, class_name=class_name
-    )
+    adaptor = Weaviate(dataset=make_dataset(3), metric=Metric.COSINE, url=BASE_URL, class_name=class_name)
     # Drop any leftover schema, then create a fresh one for the test.
     adaptor.drop_index()
     adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
@@ -206,7 +202,7 @@ def test_weaviate_metric_mapping(class_name: str):
     adaptor = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.INNER_PRODUCT,
-        base_url=BASE_URL,
+        url=BASE_URL,
         class_name=class_name,
     )
     adaptor.drop_index()

@@ -228,7 +228,7 @@ def adaptor_fixture(dataset: Dataset, stub_client: StubWeaviateClient) -> tuple[
     adaptor = Weaviate(
         dataset=dataset,
         metric=Metric.COSINE,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         client=stub_client,
     )
@@ -241,7 +241,7 @@ def test_train_index_creates_class(dataset: Dataset) -> None:
     adaptor = Weaviate(
         dataset=dataset,
         metric=Metric.COSINE,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         client=client,
     )
@@ -256,7 +256,7 @@ def test_train_index_ignores_existing_class(dataset: Dataset) -> None:
     adaptor = Weaviate(
         dataset=dataset,
         metric=Metric.COSINE,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         client=client,
     )
@@ -271,8 +271,10 @@ def test_upsert_and_search_with_stub(adaptor: tuple[Weaviate, StubWeaviateClient
         DataPoint(id=1, vector=[1.0, 0.0, 0.0], metadata={"species": "a"}),
         DataPoint(id=2, vector=[0.0, 1.0, 0.0], metadata={"originalId": 2}),
     ]
+    initial_creates = len(client.data_object.create_calls)
     weaviate_adaptor.upsert(datapoints)
-    assert len(client.data_object.create_calls) == len(datapoints)
+    new_creates = len(client.data_object.create_calls) - initial_creates
+    assert new_creates == len(datapoints)
 
     # GraphQL Get query should honour the nearVector ranking and expose _additional metadata.
     client.graphql_get_response = {
@@ -332,7 +334,7 @@ def test_delete_handles_multiple_ids(adaptor: tuple[Weaviate, StubWeaviateClient
 def test_invalid_metric_raises_value_error(dataset: Dataset) -> None:
     """Constructing with an unsupported metric string should raise ValueError."""
     with pytest.raises(ValueError):
-        Weaviate(dataset=dataset, metric="manhattan", base_url="http://example.com", class_name="TestClass")
+        Weaviate(dataset=dataset, metric="manhattan", url="http://example.com", class_name="TestClass")
 
 
 def test_upsert_rejects_dimension_mismatch(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -370,12 +372,18 @@ def test_search_applies_filters(adaptor: tuple[Weaviate, StubWeaviateClient]) ->
     assert client.get_queries[-1]["where"] == filters
 
 
-def test_error_responses_raise_weaviate_error(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """Non-success schema creation responses should raise WeaviateError."""
-    weaviate_adaptor, client = adaptor
+def test_error_responses_raise_weaviate_error(dataset: Dataset) -> None:
+    """Constructor should surface schema creation failures immediately."""
+    client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = FakeStatusError(500, "boom")
     with pytest.raises(WeaviateError):
-        weaviate_adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+        Weaviate(
+            dataset=dataset,
+            metric=Metric.COSINE,
+            url="http://example.com",
+            class_name="TestClass",
+            client=client,
+        )
 
 
 def test_drop_index_raises_on_failure(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -396,15 +404,15 @@ def test_drop_index_success(adaptor: tuple[Weaviate, StubWeaviateClient]) -> Non
 def test_check_ready_times_out() -> None:
     """_check_ready should raise when readiness never returns success."""
     client = StubWeaviateClient("TestClass")
-    client.ready_responses = [Exception("not ready")] * 5
     adaptor = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.COSINE,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         timeout=0.2,
         client=client,
     )
+    client.ready_responses = [Exception("not ready")] * 5
     with pytest.raises(WeaviateError):
         adaptor._check_ready()
 
@@ -416,7 +424,7 @@ def test_check_ready_success() -> None:
     adaptor = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.COSINE,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         timeout=1.0,
         client=client,
@@ -431,11 +439,12 @@ def test_class_exists_paths() -> None:
     adaptor = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.COSINE,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         client=client,
     )
 
+    adaptor._drop_class_if_exists()
     assert adaptor._class_exists() is False
 
     client.schema.classes["TestClass"] = {"class": "TestClass"}
@@ -450,15 +459,14 @@ def test_train_index_raises_on_failed_creation(dataset: Dataset) -> None:
     """train_index must surface exceptions raised by schema creation."""
     client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = Exception("cannot create")
-    adaptor = Weaviate(
-        dataset=dataset,
-        metric=Metric.COSINE,
-        base_url="http://example.com",
-        class_name="TestClass",
-        client=client,
-    )
     with pytest.raises(WeaviateError):
-        adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+        Weaviate(
+            dataset=dataset,
+            metric=Metric.COSINE,
+            url="http://example.com",
+            class_name="TestClass",
+            client=client,
+        )
 
 
 def test_upsert_delete_tolerates_404(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -546,14 +554,14 @@ def test_constructor_and_distance_mapping() -> None:
         _ = Weaviate(
             dataset=make_dataset(0),
             metric=Metric.COSINE,
-            base_url="http://example.com",
+            url="http://example.com",
             class_name="TestClass",
             client=StubWeaviateClient("TestClass"),
         )
     adaptor_ip = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.INNER_PRODUCT,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         client=StubWeaviateClient("TestClass"),
     )
@@ -561,7 +569,7 @@ def test_constructor_and_distance_mapping() -> None:
     adaptor_l2 = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.L2,
-        base_url="http://example.com",
+        url="http://example.com",
         class_name="TestClass",
         client=StubWeaviateClient("TestClass"),
     )

@@ -32,7 +32,7 @@ class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
     metric: Metric
-    index_type: NonEmptyStr
+    index_type: NonEmptyStr | None = None
     model_config = ConfigDict(extra="allow")
     nlist: int | None = None
     m: int | None = None

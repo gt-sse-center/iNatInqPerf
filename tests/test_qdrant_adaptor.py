@@ -8,7 +8,7 @@ from inatinqperf.adaptors.metric import Metric
 from inatinqperf.adaptors.qdrant_adaptor import Qdrant
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def container_fixture():
     """Start the docker container with the vector DB."""
     client = docker.from_env()
@@ -16,8 +16,14 @@ def container_fixture():
         "qdrant/qdrant",
         ports={"6333": "6333"},
         remove=True,
-        detach=True,  # enabled so we get back a Container object
+        detach=True,  # enabled so we don't block on this
     )
+
+    # Wait until container is running
+    # We retrieve the latest container state by querying for it
+    while container.status != "running":
+        container = client.containers.get(container.id)
+        continue
 
     yield container
     container.stop()
@@ -29,32 +35,57 @@ def collection_name_fixture():
     return "test_collection"
 
 
+@pytest.fixture(name="dim")
+def dim_fixture():
+    """The dimension of the vectors used."""
+    return 1024
+
+
+@pytest.fixture(name="N")
+def num_datapoints_fixture():
+    """The size of the dataset."""
+    return 300
+
+
+@pytest.fixture(name="vectordb")
+def vectordb_fixture(collection_name, dim):
+    """Return an instance of the Qdrant vector database."""
+
+    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
+
+    yield vectordb
+
+    vectordb.delete_collection()
+
+
+@pytest.fixture(name="dataset")
+def dataset_fixture(dim, N):
+    rng = np.random.default_rng(117)
+    ids = rng.choice(10**4, size=N, replace=False)
+    x = rng.random(size=(N, dim))
+    return (ids, x)
+
+
 def test_constructor(collection_name):
-    vectordb = Qdrant(dim=1024, metric=Metric.INNER_PRODUCT, url="localhost", collection_name=collection_name)
+    vectordb = Qdrant(dim=512, metric=Metric.INNER_PRODUCT, url="localhost", collection_name=collection_name)
     assert vectordb.client.collection_exists(collection_name)
+    vectordb.delete_collection()
 
 
 def test_constructor_different_metrics():
     for metric in (Metric.INNER_PRODUCT, Metric.COSINE, Metric.L2, Metric.MANHATTAN):
-        vdb = Qdrant(dim=1024, metric=metric, url="localhost", collection_name=str(metric))
+        vdb = Qdrant(dim=512, metric=metric, url="localhost", collection_name=str(metric))
         assert vdb.client.collection_exists(str(metric))
+        vdb.delete_collection()
 
 
 def test_constructor_invalid_metric(collection_name):
     with pytest.raises(ValueError):
-        Qdrant(dim=1024, metric="INVALID", url="localhost", collection_name=collection_name)
+        Qdrant(dim=512, metric="INVALID", url="localhost", collection_name=collection_name)
 
 
-def test_upsert(collection_name):
-    dim = 1024
-    N = 300
-
-    vectordb = Qdrant(dim=dim, metric=Metric.INNER_PRODUCT, url="localhost", collection_name=collection_name)
-
-    rng = np.random.default_rng(117)
-    ids = rng.integers(low=0, high=10**6, size=N).tolist()
-    x = rng.random(size=(N, dim))
-
+def test_upsert(collection_name, vectordb, dataset, N):
+    ids, x = dataset
     vectordb.upsert(ids, x)
 
     count_result = vectordb.client.count(collection_name=collection_name, exact=True)
@@ -62,39 +93,24 @@ def test_upsert(collection_name):
     assert count_result.count == N
 
 
-def test_search(collection_name):
-    dim = 1024
-    N = 300
-
-    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
-
-    rng = np.random.default_rng(117)
-    ids = rng.integers(low=0, high=10**6, size=N).tolist()
-    x = rng.random(size=(N, dim))
-
+def test_search(collection_name, vectordb, dataset):
+    ids, x = dataset
     vectordb.upsert(ids, x)
 
+    # query single point
     expected_id = ids[117]
     query = x[117]
     results = vectordb.search(q=query, topk=5)
 
     assert results[0].id == expected_id
-    assert results[0].score == 1.0
-    assert results[0].payload is None
-    assert results[0].vector is None
 
-    assert np.allclose(results[1].score, 0.7728137)
+    # regression
+    assert np.allclose(results[0].score, 1.0)
+    assert np.allclose(results[1].score, 0.7783108)
 
 
-def test_delete(collection_name):
-    dim = 1024
-    N = 300
-
-    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
-
-    rng = np.random.default_rng(117)
-    ids = rng.integers(low=0, high=10**6, size=N).tolist()
-    x = rng.random(size=(N, dim))
+def test_delete(collection_name, vectordb, dataset, N):
+    ids, x = dataset
 
     vectordb.upsert(ids, x)
 
@@ -109,19 +125,10 @@ def test_delete(collection_name):
     # We deleted the vector we are querying
     # so the score should not be 1.0
     assert results[0].score != 1.0
-    assert results[0].payload is None
-    assert results[0].vector is None
 
 
-def test_drop_index(collection_name):
-    dim = 1024
-    N = 300
-
-    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
-
-    rng = np.random.default_rng(117)
-    ids = rng.integers(low=0, high=10**6, size=N).tolist()
-    x = rng.random(size=(N, dim))
+def test_drop_index(collection_name, vectordb, dataset):
+    ids, x = dataset
 
     vectordb.upsert(ids, x)
 
@@ -130,9 +137,5 @@ def test_drop_index(collection_name):
     assert not vectordb.client.collection_exists(collection_name=collection_name)
 
 
-def test_stats(collection_name):
-    dim = 1024
-
-    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
-
+def test_stats(collection_name, vectordb):
     assert vectordb.stats() == {"metric": "cosine", "m": 32, "ef_construct": 128}

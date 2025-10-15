@@ -1,6 +1,5 @@
 """Vector database-agnostic benchmark orchestrator."""
 
-import json
 import time
 from http import HTTPStatus
 from pathlib import Path
@@ -17,6 +16,7 @@ from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import DataPoint, Query, VectorDatabase
 from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
+from inatinqperf.utils import Profiler, get_table
 from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
 from inatinqperf.utils.embed import (
     ImageDatasetWithEmbeddings,
@@ -24,7 +24,6 @@ from inatinqperf.utils.embed import (
     embed_text,
     to_huggingface_dataset,
 )
-from inatinqperf.utils.profiler import Profiler
 
 
 class Benchmarker:
@@ -233,7 +232,9 @@ class Benchmarker:
             "ntotal": int(x.shape[0]),
         }
 
-        logger.info(json.dumps(stats, indent=2))
+        # Make values as lists so `tabulate` can print properly.
+        table = get_table(stats)
+        logger.info(f"\n\n{table}\n\n")
 
     def update(self, dataset: Dataset, vectordb: VectorDatabase) -> None:
         """Upsert + delete small batch and re-search."""

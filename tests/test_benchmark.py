@@ -163,8 +163,8 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
     assert (embedding_dir / "dataset_info.json").exists()
 
 
-def test_build(config_yaml, monkeypatch, data_path, mocked_benchmark):
-    dataset = mocked_benchmark.load_huggingface_dataset(data_path)
+def test_build(config_yaml, data_path, mocked_benchmark_module):
+    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
 
     benchmarker = Benchmarker(config_yaml)
 

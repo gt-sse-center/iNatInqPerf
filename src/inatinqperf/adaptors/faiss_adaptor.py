@@ -166,13 +166,13 @@ class Faiss(VectorDatabase):
             raise ValueError(msg)
 
         if query_vector.shape[0] != self.dim:
-            msg = f"Query vector has incorrect dimension dim={query_vector.shape[0]}"
+            msg = f"Query vector has incorrect dimension={query_vector.shape[0]}"
             raise ValueError(msg)
 
         # Add extra dimension to make the query vector compatible with FAISS
         query_vector = query_vector[None, :]
 
-        if self.index_type == "IVFPQ":
+        if self.index_type == FaissIndexType.IVFPQ:
             # Runtime override for nprobe
             ivf = _unwrap_to_ivf(self.index.index)
             if ivf is not None and hasattr(ivf, "nprobe"):

@@ -32,6 +32,7 @@ dependencies = [
     "pydantic>=2.11.9",
     "typer>=0.17.4",
     "qdrant-client>=1.12.1",
+    "tabulate>=0.9.0",
 ]
 
 classifiers = [
@@ -86,14 +87,15 @@ select = ["ALL"]
 ignore = [
     "ANN002", # Missing type annotation for `*args`
     "ANN003", # Missing type annotation for `**kwargs`
-    "BLE001", # Do not catch blind exception: `Exception`
     "B905", # `zip()` without an explicit `strict=` parameter
+    "BLE001", # Do not catch blind exception: `Exception`
     "COM812", # Trailing comma missing
     "D105", # Missing docstring in magic method
     "D107", # Missing docstring in `__init__` method
     "D202", # No blank lines allowed after function docstring
     "D203", # Incorrect blank line before class
     "D213", # Multi line summary second line
+    "EM101", # Separate message assignment for exception
     "FIX002", # Line contains TODO, consider resolving the issue
     "N802", # Function name `xxx` should be lowercase
     "N999", # Invalid module name

@@ -139,11 +139,10 @@ def test_weaviate_adaptor_lifecycle(class_name: str):
     assert stats["ntotal"] == len(ids)
     assert stats["class_name"] == class_name
 
-    query = np.array([[1.0, 0.1, 0.0, 0.0]], dtype=np.float32)
-    distances, found_ids = adaptor.search(query, topk=3)
-    assert distances.shape == (1, 3)
-    assert found_ids.shape == (1, 3)
-    assert int(found_ids[0, 0]) == 100
+    query = np.array([1.0, 0.1, 0.0, 0.0], dtype=np.float32)
+    results = adaptor.search(query, topk=3)
+    assert len(results) == 3
+    assert results[0].id == 100
 
     adaptor.delete([100, 999])
     stats_after_delete = adaptor.stats()
@@ -169,9 +168,9 @@ def test_weaviate_upsert_replaces_vectors(class_name: str):
     assert stats["ntotal"] == len(ids)
 
     # Ensure subsequent search surfaces the updated vectors (id=2 closer to query)
-    query = np.array([[0.0, 1.0, 0.5]], dtype=np.float32)
-    distances, found_ids = adaptor.search(query, topk=2)
-    assert found_ids[0, 0] == 2
+    query = np.array([0.0, 1.0, 0.5], dtype=np.float32)
+    results = adaptor.search(query, topk=2)
+    assert results[0].id == 2
 
     adaptor.drop_index()
 
@@ -186,10 +185,9 @@ def test_weaviate_metric_mapping(class_name: str):
     vectors = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
     adaptor.upsert(ids, vectors)
 
-    query = np.array([[0.6, 0.4]], dtype=np.float32)
-    distances, found_ids = adaptor.search(query, topk=2)
-    assert distances.shape == (1, 2)
-    assert found_ids.shape == (1, 2)
-    assert set(found_ids[0]) == {10, 11}
+    query = np.array([0.6, 0.4], dtype=np.float32)
+    results = adaptor.search(query, topk=2)
+    assert len(results) == 2
+    assert set(r.id for r in results) == {10, 11}
 
     adaptor.drop_index()

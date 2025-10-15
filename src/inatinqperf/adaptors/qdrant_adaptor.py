@@ -1,19 +1,19 @@
 """Qdrant vector database adaptor."""
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 
 import numpy as np
+from loguru import logger
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    Batch,
     Distance,
     HnswConfigDiff,
-    ScoredPoint,
+    PointStruct,
     SearchParams,
     VectorParams,
 )
 
-from inatinqperf.adaptors.base import VectorDatabase
+from inatinqperf.adaptors.base import SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
 
 
@@ -41,6 +41,7 @@ class Qdrant(VectorDatabase):
         self.ef_construct = ef_construct
 
         if not self.client.collection_exists(collection_name=collection_name):
+            logger.info(f"Creating collection {collection_name}")
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=VectorParams(
@@ -78,15 +79,29 @@ class Qdrant(VectorDatabase):
         """Drop the index by deleting the collection."""
         self.client.delete_collection(self.collection_name)
 
+    @staticmethod
+    def _points_iterator(ids: Sequence[int], vectors: np.ndarray) -> Generator[PointStruct]:
+        """A generator to help with creating PointStructs."""
+        for idx, vector in zip(ids, vectors, strict=True):
+            yield PointStruct(id=idx, vector=vector)
+
     def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
         """Upsert vectors with given IDs. This also builds the HNSW index."""
-        self.client.upsert(
+        # Qdrant requires list of ints
+        ids = ids.tolist()
+
+        # Qdrant will override points with the same ID if they already exist,
+        # which is the same behavior as `upsert`.
+        # Hence we use `upload_points` for performance.
+        logger.info("Uploading points to database")
+        self.client.upload_points(
             collection_name=self.collection_name,
-            points=Batch(ids=ids, vectors=x),
+            points=self._points_iterator(ids=ids, vectors=x),
+            parallel=4,
             wait=True,
         )
 
-    def search(self, q: np.ndarray, topk: int, **kwargs) -> Sequence[ScoredPoint]:
+    def search(self, q: np.ndarray, topk: int, **kwargs) -> Sequence[SearchResult]:
         """Search for top-k nearest neighbors."""
         # Has support for attribute filter: https://qdrant.tech/documentation/quickstart/#add-a-filter
 
@@ -99,11 +114,17 @@ class Qdrant(VectorDatabase):
             limit=topk,
             search_params=SearchParams(hnsw_ef=ef, exact=False),
         )
-        return search_result.points
 
-    def delete(self, ids: Sequence[int]) -> None:
+        return [SearchResult(point.id, point.score) for point in search_result.points]
+
+    def delete(self, ids: np.ndarray[int]) -> None:
         """Delete vectors with given IDs."""
-        self.client.delete(collection_name=self.collection_name, points_selector=ids)
+        self.client.delete(collection_name=self.collection_name, points_selector=ids.tolist())
+
+    def delete_collection(self) -> None:
+        """Delete the collection associated with this adaptor instance."""
+        logger.info(f"Deleting collection {self.collection_name}")
+        self.client.delete_collection(collection_name=self.collection_name)
 
     def stats(self) -> dict[str, object]:
         """Return index statistics."""

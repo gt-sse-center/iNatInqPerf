@@ -84,8 +84,16 @@ def test_constructor_invalid_metric(collection_name):
         Qdrant(dim=512, metric="INVALID", url="localhost", collection_name=collection_name)
 
 
-def test_upsert(collection_name, vectordb, dataset, N):
-    ids, x = dataset
+def test_upsert(collection_name):
+    dim = 1024
+    N = 300
+
+    vectordb = Qdrant(dim=dim, metric=Metric.INNER_PRODUCT, url="localhost", collection_name=collection_name)
+
+    rng = np.random.default_rng(117)
+    ids = rng.integers(low=0, high=10**6, size=N)
+    x = rng.random(size=(N, dim))
+
     vectordb.upsert(ids, x)
 
     count_result = vectordb.client.count(collection_name=collection_name, exact=True)
@@ -93,8 +101,16 @@ def test_upsert(collection_name, vectordb, dataset, N):
     assert count_result.count == N
 
 
-def test_search(collection_name, vectordb, dataset):
-    ids, x = dataset
+def test_search(collection_name):
+    dim = 1024
+    N = 300
+
+    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
+
+    rng = np.random.default_rng(117)
+    ids = rng.integers(low=0, high=10**4, size=N)
+    x = rng.random(size=(N, dim))
+
     vectordb.upsert(ids, x)
 
     # query single point
@@ -103,14 +119,22 @@ def test_search(collection_name, vectordb, dataset):
     results = vectordb.search(q=query, topk=5)
 
     assert results[0].id == expected_id
+    assert results[0].score == 1.0
 
     # regression
     assert np.allclose(results[0].score, 1.0)
     assert np.allclose(results[1].score, 0.7783108)
 
 
-def test_delete(collection_name, vectordb, dataset, N):
-    ids, x = dataset
+def test_delete(collection_name):
+    dim = 1024
+    N = 300
+
+    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
+
+    rng = np.random.default_rng(117)
+    ids = rng.integers(low=0, high=10**6, size=N)
+    x = rng.random(size=(N, dim))
 
     vectordb.upsert(ids, x)
 
@@ -127,8 +151,15 @@ def test_delete(collection_name, vectordb, dataset, N):
     assert results[0].score != 1.0
 
 
-def test_drop_index(collection_name, vectordb, dataset):
-    ids, x = dataset
+def test_drop_index(collection_name):
+    dim = 1024
+    N = 300
+
+    vectordb = Qdrant(dim=dim, metric=Metric.COSINE, url="localhost", collection_name=collection_name)
+
+    rng = np.random.default_rng(117)
+    ids = rng.integers(low=0, high=10**4, size=N)
+    x = rng.random(size=(N, dim))
 
     vectordb.upsert(ids, x)
 

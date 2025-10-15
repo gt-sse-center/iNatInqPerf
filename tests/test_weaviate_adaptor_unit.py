@@ -9,6 +9,8 @@ Each test focuses on a specific slice of the Weaviate client API:
 
 from __future__ import annotations
 
+import uuid
+
 import numpy as np
 import pytest
 from datasets import Dataset

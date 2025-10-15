@@ -38,13 +38,13 @@ class Weaviate(VectorDatabase):
     def __init__(
         self,
         dataset: HuggingFaceDataset,
-        metric: Metric | str = Metric.COSINE,
-        *,
-        base_url: str = "http://localhost:8080",
+        metric: Metric,
+        url: str,
         class_name: str = "collection_name",
         timeout: float = 10.0,
         vectorizer: str = "none",
         client: WeaviateClient | None = None,
+        index_type: str | None = None,  # noqa: ARG002 - interface contract
     ) -> None:
         """Initialise the adaptor with a dataset template and connectivity details."""
         metric_enum = metric if isinstance(metric, Metric) else Metric(metric)
@@ -55,7 +55,7 @@ class Weaviate(VectorDatabase):
             raise ValueError(msg)
 
         self._metric = metric_enum
-        self.base_url = base_url.rstrip("/")
+        self.url = url.rstrip("/")
         self.class_name = class_name
         self.timeout = timeout
         self.vectorizer = vectorizer
@@ -63,16 +63,20 @@ class Weaviate(VectorDatabase):
 
         # The official Weaviate client exposes the schema, data, and query APIs we rely on.
         self._client: WeaviateClient = client or WeaviateClient(
-            url=self.base_url,
+            url=self.url,
             timeout_config=(self.timeout, self.timeout),
         )
 
+        self._drop_class_if_exists()
+        self._ensure_schema_exists()
+        self._ingest_dataset(dataset)
+
         logger.info(
-            "[WeaviateAdaptor] Ready for base_url=%s class='%s' dim=%d metric=%s",
-            self.base_url,
-            self.class_name,
-            self.dim,
-            self._metric.value,
+            "[WeaviateAdaptor] init "
+            f"url={self.url} "
+            f"class={self.class_name} "
+            f"dim={self.dim} "
+            f"metric={self._metric.value}"
         )
 
     # ------------------------------------------------------------------
@@ -80,39 +84,7 @@ class Weaviate(VectorDatabase):
     # ------------------------------------------------------------------
     def train_index(self, x_train: np.ndarray) -> None:  # noqa: ARG002 - interface contract
         """Ensure that the backing Weaviate class exists."""
-        self._check_ready()
-        if self._class_exists():
-            return
-
-        payload = {
-            "class": self.class_name,
-            "description": self._DEFAULT_DESCRIPTION,
-            "vectorizer": self.vectorizer,
-            "vectorIndexType": "hnsw",
-            "vectorIndexConfig": {
-                # The benchmark toggles distance metrics; Weaviate expects these canonical names.
-                "distance": self._distance_metric,
-                "vectorCacheMaxObjects": 1_000_000,
-            },
-            "properties": [
-                {
-                    "name": self._ORIGINAL_ID_FIELD,
-                    "description": "Original integer identifier",
-                    "dataType": ["int"],
-                }
-            ],
-        }
-
-        try:
-            self._client.schema.create_class(payload)
-        except Exception as exc:  # pragma: no cover - defensive programming
-            status_code = getattr(exc, "status_code", None)
-            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY and "already exists" in str(exc).lower():
-                logger.info("[WeaviateAdaptor] Class %s already exists; continuing.", self.class_name)
-                return
-            self._handle_exception("failed to create class", exc)
-
-        logger.info("[WeaviateAdaptor] Created class=%s", self.class_name)
+        self._ensure_schema_exists()
 
     def drop_index(self) -> None:
         """Delete the managed class entirely."""
@@ -121,11 +93,11 @@ class Weaviate(VectorDatabase):
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = getattr(exc, "status_code", None)
             if status_code == HTTPStatus.NOT_FOUND:
-                logger.info("[WeaviateAdaptor] Class %s already absent.", self.class_name)
+                logger.info(f"[WeaviateAdaptor] Class {self.class_name} already absent.")
                 return
             self._handle_exception("failed to delete class", exc)
 
-        logger.info("[WeaviateAdaptor] Dropped class=%s", self.class_name)
+        logger.info(f"[WeaviateAdaptor] Dropped class={self.class_name}")
 
     def upsert(self, x: Sequence[DataPoint]) -> None:
         """Insert or update vectors and associated metadata."""
@@ -204,14 +176,13 @@ class Weaviate(VectorDatabase):
             status_code = getattr(exc, "status_code", None)
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
                 logger.warning(
-                    "[WeaviateAdaptor] search requested before schema exists (class=%s).",
-                    self.class_name,
+                    f"[WeaviateAdaptor] search requested before schema exists (class={self.class_name})."
                 )
                 return []
             self._handle_exception("search request failed", exc)
 
         results = self._extract_results(data)
-        return results[:topk]
+        return [SearchResult(id=result.id, score=result.score) for result in results[:topk]]
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete objects corresponding to the provided identifiers."""
@@ -227,14 +198,13 @@ class Weaviate(VectorDatabase):
             status_code = getattr(exc, "status_code", None)
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
                 logger.warning(
-                    "[WeaviateAdaptor] stats requested before schema exists (class=%s).",
-                    self.class_name,
+                    f"[WeaviateAdaptor] stats requested before schema exists (class={self.class_name})."
                 )
                 return {
                     "ntotal": 0,
                     "metric": self._metric.value,
                     "class_name": self.class_name,
-                    "base_url": self.base_url,
+                    "url": self.url,
                     "dim": self.dim,
                 }
             self._handle_exception("failed to fetch stats", exc)
@@ -244,10 +214,10 @@ class Weaviate(VectorDatabase):
             "ntotal": count,
             "metric": self._metric.value,
             "class_name": self.class_name,
-            "base_url": self.base_url,
+            "url": self.url,
             "dim": self.dim,
         }
-        logger.debug("[WeaviateAdaptor] Stats for %s => %s", self.class_name, stats)
+        logger.debug(f"[WeaviateAdaptor] Stats for {self.class_name} => {stats}")
         return stats
 
     # ------------------------------------------------------------------
@@ -261,7 +231,7 @@ class Weaviate(VectorDatabase):
         while time.time() < deadline:
             try:
                 if self._client.is_ready():
-                    logger.info("[WeaviateAdaptor] Weaviate ready at %s", self.base_url)
+                    logger.info(f"[WeaviateAdaptor] Weaviate ready at {self.url}")
                     return
             except Exception as exc:  # pragma: no cover - depends on client internals
                 last_error = exc
@@ -281,6 +251,86 @@ class Weaviate(VectorDatabase):
 
         classes = schema.get("classes", [])
         return any(entry.get("class") == self.class_name for entry in classes)
+
+    def _ensure_schema_exists(self) -> None:
+        """Create the Weaviate class if it does not already exist."""
+        self._check_ready()
+        if self._class_exists():
+            return
+
+        payload = self._schema_payload()
+        try:
+            self._client.schema.create_class(payload)
+        except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY and "already exists" in str(exc).lower():
+                logger.info(f"[WeaviateAdaptor] Class {self.class_name} already exists; continuing.")
+                return
+            self._handle_exception("failed to create class", exc)
+
+        logger.info(f"[WeaviateAdaptor] Created class {self.class_name}")
+
+    def _drop_class_if_exists(self) -> None:
+        """Drop the target class if it already exists."""
+        try:
+            self._client.schema.delete_class(self.class_name)
+        except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code != HTTPStatus.NOT_FOUND:
+                self._handle_exception("failed to drop existing class", exc)
+
+    def _schema_payload(self) -> dict[str, object]:
+        """Return the schema definition submitted to Weaviate."""
+
+        return {
+            "class": self.class_name,
+            "description": self._DEFAULT_DESCRIPTION,
+            "vectorizer": self.vectorizer,
+            "vectorIndexType": "hnsw",
+            "vectorIndexConfig": {
+                "distance": self._distance_metric,
+                "vectorCacheMaxObjects": 1_000_000,
+            },
+            "properties": [
+                {
+                    "name": self._ORIGINAL_ID_FIELD,
+                    "description": "Original integer identifier",
+                    "dataType": ["int"],
+                }
+            ],
+        }
+
+    def _ingest_dataset(self, dataset: HuggingFaceDataset) -> None:
+        """Load existing dataset vectors into the managed Weaviate class."""
+
+        if "embedding" not in dataset.column_names:
+            logger.warning("[WeaviateAdaptor] dataset missing 'embedding' column; skipping ingest")
+            return
+
+        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
+        if embeddings.size == 0:
+            logger.warning("[WeaviateAdaptor] dataset contains no embeddings; skipping ingest")
+            return
+
+        if embeddings.ndim != self._EXPECTED_VECTOR_RANK or embeddings.shape[1] != self.dim:
+            msg = (
+                "Dataset embeddings must be 2-D with dimensionality matching the adaptor "
+                f"(expected {self.dim}, received {embeddings.shape})"
+            )
+            raise ValueError(msg)
+
+        if "id" in dataset.column_names:
+            ids = dataset["id"]
+            if len(ids) != len(embeddings):
+                msg = "Length of dataset ids must match number of embeddings"
+                raise ValueError(msg)
+        else:
+            ids = list(range(len(embeddings)))
+
+        datapoints = [
+            DataPoint(id=int(idx), vector=vec, metadata={}) for idx, vec in zip(ids, embeddings, strict=False)
+        ]
+        self.upsert(datapoints)
 
     @staticmethod
     def _translate_metric(metric: Metric) -> str:

@@ -15,3 +15,11 @@ class Metric(str, enum.Enum):
     COSINE = "cosine"  # Cosine distance
     L2 = "l2"  # Euclidean L2 distance
     MANHATTAN = "l1"  # Taxicab/L1 distance
+
+    @classmethod
+    def _missing_(cls, value: str) -> "Metric | None":
+        value = value.lower()
+        for member in cls:
+            if member.value == value:
+                return member
+        return None

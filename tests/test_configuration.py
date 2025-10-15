@@ -28,6 +28,7 @@ def test_embedding_params(benchmark_yaml):
 def test_vectordatabase_params(benchmark_yaml):
     params = VectorDatabaseParams(**benchmark_yaml["vectordb"]["params"])
     assert params.metric == "ip"
+    assert params.index_type == "IVFPQ"
     assert params.nlist == 32768
     assert params.m == 64
     assert params.nbits == 2
@@ -36,7 +37,7 @@ def test_vectordatabase_params(benchmark_yaml):
 
 def test_vectordatabase_config(benchmark_yaml):
     config = VectorDatabaseConfig(**benchmark_yaml["vectordb"])
-    assert config.type == "faiss.ivfpq"
+    assert config.type == "faiss"
     assert isinstance(config.params, VectorDatabaseParams)
 
 

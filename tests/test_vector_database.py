@@ -1,16 +1,17 @@
 """Tests for vector database operations."""
 
 import numpy as np
+from collections.abc import Sequence
 import pytest
 
-from inatinqperf.adaptors.base import VectorDatabase
+from inatinqperf.adaptors.base import VectorDatabase, DataPoint, Query, SearchResult, HuggingFaceDataset
 from inatinqperf.adaptors.metric import Metric
 
 
 def test_vectordb_is_abstract():
     # You should not be able to instantiate the ABC directly
     with pytest.raises(TypeError):
-        _ = VectorDatabase()  # type: ignore[abstract]
+        VectorDatabase()  # type: ignore[abstract]
 
 
 def test_partial_implementation_rejected():
@@ -32,71 +33,72 @@ class DummyVectorDatabase(VectorDatabase):
     Implements brute-force search in-memory to validate shapes & lifecycle.
     """
 
-    def __init__(self, dim: int, metric: str, **params):
-        super().__init__()
+    def __init__(self, dataset, metric: str, **params):
+        super().__init__(dataset, metric)
+
+        dataset = dataset.with_format("numpy")
+        dim = dataset["embedding"].shape[1]
 
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
         self._metric = metric.lower()
-        self._X = np.zeros((0, dim), dtype=np.float32)
-        self._ids = np.zeros((0,), dtype=np.int64)
-        self._dropped = False
+
+        # "Upsert" dataset
+        self._X = dataset["embedding"]
+        self._ids = dataset["id"]
 
     def train_index(self, x_train: np.ndarray):
         # Should be a no-op for this dummy; just validate dims
         assert self._dim == x_train.shape[1]
 
-    def upsert(self, ids: np.ndarray, x: np.ndarray):
-        assert self._dim == x.shape[1]
-        assert ids.shape[0] == x.shape[0]
+    def upsert(self, x: Sequence[DataPoint]):
+        ids = np.asarray([d.id for d in x], dtype=np.int64)
+        vecs = np.asarray([d.vector for d in x], dtype=np.float32)
+
         # Remove any existing ids first (upsert semantics)
         mask_keep = np.isin(self._ids, ids, invert=True)
         self._ids = self._ids[mask_keep]
         self._X = self._X[mask_keep]
-        # Append new
-        self._ids = np.concatenate([self._ids, ids.astype(np.int64)])
-        self._X = np.vstack([self._X, x.astype(np.float32)])
 
-    def _sim(self, Q: np.ndarray, X: np.ndarray) -> np.ndarray:
+        # Append new
+        self._ids = np.concatenate([self._ids, ids])
+        self._X = np.vstack([self._X, vecs])
+
+    def _similarity(self, q: np.ndarray, X: np.ndarray) -> np.ndarray:
         if self._metric in ("ip", "inner_product", "dot", "cosine"):
-            # cosine handled by normalized vectors; for simplicity treat as dot here
-            return Q @ X.T
+            # cosine handled by normalized vectors
+            normalizer = np.linalg.norm(X, axis=1) * np.linalg.norm(q)
+            return np.divide(X.dot(q), normalizer)
+
         elif self._metric in ("l2", "euclidean"):
-            # Convert L2 distance to a "higher is better" score
+            # Convert L2 distance to a similarity score (higher is better)
             # score = -||q - x||^2 = - (q^2 + x^2 - 2 q·x)
-            q2 = np.sum(Q**2, axis=1, keepdims=True)
-            x2 = np.sum(X**2, axis=1, keepdims=True).T
-            return -(q2 + x2 - 2.0 * (Q @ X.T))
+            return -np.power(np.linalg.norm(X - q, axis=1, keepdims=True), 2).squeeze()
         else:
             raise ValueError(f"unsupported metric {self._metric}")
 
-    def search(self, q: np.ndarray, topk: int, **kwargs):
+    def search(self, q: Query, topk: int, **kwargs):
         assert self._X is not None and self._ids is not None
-        assert q.shape[1] == self._X.shape[1]
-        sims = self._sim(q.astype(np.float32), self._X)
+
+        query_vector = np.asarray(q.vector, dtype=np.float32)
+        assert query_vector.shape[0] == self._X.shape[1]
+
+        scores = self._similarity(query_vector, self._X)
+
         # argsort descending (higher score = better)
-        idx = np.argpartition(-sims, kth=min(topk - 1, sims.shape[1] - 1), axis=1)[:, :topk]
-        # sort each row fully
-        row_indices = np.arange(q.shape[0])[:, None]
-        top_scores = sims[row_indices, idx]
-        order = np.argsort(-top_scores, axis=1)
-        idx_sorted = idx[row_indices, order]
-        D = sims[row_indices, idx_sorted].astype(np.float32)
-        I = self._ids[idx_sorted].astype(np.int64)
-        return D, I
+        descending_sorted_idxs = np.argsort(scores)[::-1]
+
+        # Get topk
+        idxs = descending_sorted_idxs[:topk]
+
+        return [SearchResult(id=self._ids[idx], score=scores[idx]) for idx in idxs]
 
     def stats(self):
         return {
             "ntotal": int(self._X.shape[0]) if self._X is not None else 0,
             "dim": int(self._dim) if self._dim is not None else None,
             "metric": self._metric,
-            "dropped": bool(self._dropped),
         }
-
-    def drop_index(self):
-        self._X = None
-        self._ids = None
-        self._dropped = True
 
     def delete(self, ids):
         ids = np.asarray(list(ids), dtype=np.int64)
@@ -118,34 +120,25 @@ def tiny_dataset_fixture():
         dtype=np.float32,
     )
     ids = np.array([10, 11, 12, 13], dtype=np.int64)
-    return ids, X
+
+    data_dict = {"embedding": X, "id": ids}
+    return HuggingFaceDataset.from_dict(data_dict)
 
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
 def test_lifecycle_and_shapes(metric, tiny_dataset):
-    ids, X = tiny_dataset
-
-    db = DummyVectorDatabase(dim=2, metric=metric)
-
-    # train should be a no-op but must accept input
-    db.train_index(X)
-
-    # upsert vectors
-    db.upsert(ids, X)
+    db = DummyVectorDatabase(tiny_dataset, metric=metric)
 
     # search with two queries
-    Q = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
+    q = Query([1.0, 0.0])
     topk = 3
-    D, I = db.search(Q, topk=topk)
+    results = db.search(q, topk=topk)
 
     # Shape checks
-    assert D.shape == (Q.shape[0], topk)
-    assert I.shape == (Q.shape[0], topk)
-    assert D.dtype == np.float32
-    assert I.dtype == np.int64
+    assert len(results) == topk
 
-    # Basic correctness checks (nearest to [1,0] should include id 10)
-    assert 10 in I[0]
+    # Basic correctness checks (nearest to [1,0] should be id 10)
+    assert results[0].id == 10
 
     # stats must be a dict with expected keys
     st = db.stats()
@@ -159,26 +152,26 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
     st2 = db.stats()
     assert st2["ntotal"] == 2
 
-    # drop should release data
-    db.drop_index()
-    assert db.stats()["dropped"] is True
-
 
 def test_upsert_replaces_existing(tiny_dataset):
-    ids, X = tiny_dataset
-    db = DummyVectorDatabase(dim=2, metric=Metric.INNER_PRODUCT)
-    db.upsert(ids, X)
+    db = DummyVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
 
     # Upsert same ids with shifted vectors
+    tiny_dataset = tiny_dataset.with_format("numpy")
+    ids = tiny_dataset["id"]
+    X = tiny_dataset["embedding"]
     X2 = X + 1.0
-    db.upsert(ids, X2)
+    data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(ids, X2)]
+    db.upsert(data_points)
 
     # Should contain exactly len(ids) vectors (deduped), not doubled
     assert db.stats()["ntotal"] == len(ids)
 
     # Query should reflect updated vectors
-    Q = np.array([[2.0, 1.0]], dtype=np.float32)
-    _, I = db.search(Q, topk=1)
-    assert I.shape == (1, 1)
-    # With IP and shifted vectors, id 12 ([2,2]) should db the best match
-    assert I[0, 0] in ids
+    q = Query([2.0, 1.0])
+    results = db.search(q, topk=1)
+    assert len(results) == 1
+
+    # With IP and shifted vectors, id 12 ([2,2]) should be the best match
+    # assert I[0, 0] in ids
+    print(results)

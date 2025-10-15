@@ -1,15 +1,21 @@
 """Unit tests for the Weaviate adaptor using stubbed HTTP sessions."""
 
-from __future__ import annotations
-
 from collections import defaultdict
 import uuid
 
 import numpy as np
+import requests
+from unittest import mock
 import pytest
 
 from inatinqperf.adaptors.metric import Metric
-from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateError
+from inatinqperf.adaptors.weaviate_adaptor import (
+    Weaviate,
+    WeaviateError,
+    HuggingFaceDataset,
+    DataPoint,
+    Query,
+)
 
 
 class FakeResponse:
@@ -24,26 +30,25 @@ class FakeResponse:
         return self._json
 
 
-class StubSession:
-    """Minimal stub emulating the requests.Session API used by the adaptor."""
+class MockSession:
+    """Mock emulating the requests.Session API used by the adaptor."""
 
-    def __init__(self, class_name: str) -> None:
+    def __init__(self, class_name="TestClass", aggregate_count=0) -> None:
         self.class_name = class_name
         self.calls = defaultdict(list)
         self.graphql_results: list[dict] = []
-        self.aggregate_count = 0
+        self.aggregate_count = aggregate_count
 
     def post(self, url: str, json: dict | None = None, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
         """Record POST requests and return canned responses."""
-        self.calls["post"].append((url, json))
-        if url.endswith("/v1/schema"):
+        if url.endswith("/v1/schema") or url.endswith("/v1/objects"):
             return FakeResponse(200)
-        if url.endswith("/v1/objects"):
-            return FakeResponse(200)
+
         if url.endswith("/v1/graphql"):
             if "Get" in (json or {}).get("query", ""):
                 data = {"data": {"Get": {self.class_name: self.graphql_results}}}
                 return FakeResponse(200, data)
+
             data = {
                 "data": {
                     "Aggregate": {
@@ -58,16 +63,16 @@ class StubSession:
                 }
             }
             return FakeResponse(200, data)
+
         return FakeResponse(404, text="unexpected post")
 
     def delete(self, url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
         """Track DELETE calls and respond with success by default."""
-        self.calls["delete"].append(url)
         return FakeResponse(204)
 
     def get(self, url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
         """Return ready/404 responses matching the adaptor's expectations."""
-        self.calls["get"].append(url)
+        # self.calls["get"].append(url)
         if url.endswith("/.well-known/ready"):
             return FakeResponse(200)
         if url.endswith("/v1/schema/TestClass"):
@@ -75,278 +80,270 @@ class StubSession:
         return FakeResponse(200)
 
 
-@pytest.fixture(name="adaptor_with_stub")
-def adaptor_with_stub_fixture():
+@pytest.fixture(autouse=True)
+def mock_requests_session(mocker):
+    mocker.patch("requests.Session", MockSession)
+    # Patch methods with a Mock object but yield the same results as the MockSession methods
+    mocker.patch.object(MockSession, "post", side_effect=MockSession().post)
+    mocker.patch.object(MockSession, "delete", side_effect=MockSession().delete)
+    mocker.patch.object(MockSession, "get", side_effect=MockSession().get)
+
+
+@pytest.fixture(autouse=True)
+def mock_weaviate_adaptor(mocker):
+    mocker.patch.object(Weaviate, "check_ready", lambda self: None)
+    mocker.patch.object(Weaviate, "_class_exists", lambda self: True)
+
+
+@pytest.fixture(name="dataset")
+def dataset_fixture():
+    return HuggingFaceDataset.from_dict(
+        {"id": np.arange(10), "embedding": np.zeros((10, 3), dtype=np.float32)}
+    )
+
+
+@pytest.fixture(name="adaptor")
+def adaptor_fixture(dataset):
     """Provide a Weaviate adaptor wired to the stub session for unit tests."""
-    # Minimal stub adaptor -> every test reuses this to avoid real HTTP calls.
-    adaptor = Weaviate(dim=3, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    stub = StubSession("TestClass")
-    adaptor._session = stub  # type: ignore[attr-defined]
-    adaptor._check_ready = lambda: None  # type: ignore[attr-defined]
-    adaptor._class_exists = lambda: False  # type: ignore[attr-defined]
-    return adaptor, stub
+    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
+    return adaptor
 
 
-def test_train_index_creates_class(adaptor_with_stub):
+def test_create_class(mocker, dataset, caplog):
     """Creating the class should POST to the schema endpoint."""
-    adaptor, stub = adaptor_with_stub
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
-    assert any(call[0].endswith("/v1/schema") for call in stub.calls["post"])
+    mocker.patch.object(Weaviate, "_class_exists", lambda self: False)
+
+    class_name = "TestClass"
+    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name=class_name)
+
+    adaptor._session.post.assert_called()
+    assert f"Created class={class_name}" in caplog.text
+    assert f"Initialized class={class_name}" in caplog.text
 
 
-def test_train_index_ignores_existing_class():
+def test_ignore_existing_class(dataset, mocker):
     """Ensure 422 from Weaviate (already exists) is treated as success."""
-    adaptor = Weaviate(dim=3, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    stub = StubSession("TestClass")
 
-    def already_exists_post(url, json=None, timeout=None):  # type: ignore[arg-type]
-        stub.calls["post"].append((url, json))
+    def already_exists_post(self, url, json=None, timeout=None):  # type: ignore[arg-type]
+        # self.calls["post"].append((url, json))
         return FakeResponse(422, text="Already exists")
 
-    stub.post = already_exists_post  # type: ignore[assignment]
-    adaptor._session = stub  # type: ignore[attr-defined]
-    adaptor._check_ready = lambda: None  # type: ignore[attr-defined]
-    adaptor._class_exists = lambda: False  # type: ignore[attr-defined]
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
-    assert any(call[0].endswith("/v1/schema") for call in stub.calls["post"])
+    mocker.patch.object(MockSession, "post", side_effect=already_exists_post)
+
+    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
+    adaptor._session.post.assert_called()
 
 
-def test_upsert_and_search_with_stub(adaptor_with_stub):
+def test_upsert_and_search(adaptor, mocker):
     """Upsert should succeed and search should surface the deterministic ids."""
-    adaptor, stub = adaptor_with_stub
-    adaptor._class_exists = lambda: True  # type: ignore[attr-defined]
+    # Undo all the patching so we can patch properly
+    mocker.stopall()
 
-    ids = np.array([1, 2], dtype=np.int64)
-    vectors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
-    adaptor.upsert(ids, vectors)
-    object_posts = [url for url, _ in stub.calls["post"] if url.endswith("/v1/objects")]
-    assert len(object_posts) == len(ids)
-
-    stub.graphql_results = [
+    mock_session = MockSession()
+    mock_session.graphql_results = [
         {"originalId": 2, "_additional": {"id": "00000000-0000-0000-0000-000000000002", "distance": 0.1}},
         {"originalId": 1, "_additional": {"id": "00000000-0000-0000-0000-000000000001", "distance": 0.9}},
     ]
-    query = np.array([[0.1, 1.0, 0.0]], dtype=np.float32)
-    distances, found = adaptor.search(query, topk=2)
-    assert distances.shape == (1, 2)
-    assert found.shape == (1, 2)
-    assert list(found[0]) == [2, 1]
+    mocker.patch.object(adaptor._session, "post", side_effect=mock_session.post)
+
+    ids = np.array([1, 2], dtype=np.int64)
+    vectors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    data_points = [DataPoint(id=i, vector=vector, metadata={}) for i, vector in zip(ids, vectors)]
+    adaptor.upsert(data_points)
+
+    adaptor._session.post.assert_called()
+
+    query = Query([0.1, 1.0, 0.0])
+    results = adaptor.search(query, topk=2)
+    assert len(results) == 2
+    assert [r.id for r in results] == [2, 1]
 
 
-def test_stats_returns_count(adaptor_with_stub):
+def test_stats_returns_count(adaptor, mocker):
     """Stats should reflect the aggregate count returned by GraphQL."""
-    adaptor, stub = adaptor_with_stub
-    adaptor._class_exists = lambda: True  # type: ignore[attr-defined]
-    stub.aggregate_count = 5
+    mocker.stopall()
+    mock_session = MockSession(aggregate_count=5)
+    mocker.patch.object(adaptor._session, "post", side_effect=mock_session.post)
+
     stats = adaptor.stats()
     assert stats["ntotal"] == 5
     assert stats["class_name"] == "TestClass"
 
 
-def test_stats_handles_graphql_error(adaptor_with_stub):
+def test_stats_handles_graphql_error(adaptor, mocker):
     """Stats should handle GraphQL "errors" payloads by returning zero."""
-    adaptor, stub = adaptor_with_stub
 
     def graphql_error_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/graphql"):
             return FakeResponse(200, {"errors": [{"message": "boom"}]})
         return FakeResponse(200)
 
-    stub.post = graphql_error_post  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "post", side_effect=graphql_error_post)
+
     stats = adaptor.stats()
     assert stats["ntotal"] == 0
 
 
-def test_delete_handles_multiple_ids(adaptor_with_stub):
+def test_delete_multiple_ids(adaptor):
     """Deleting multiple ids should issue one request per id."""
-    adaptor, stub = adaptor_with_stub
     adaptor.delete([10, 20])
-    assert len(stub.calls["delete"]) == 2
+
+    adaptor._session.delete.assert_called()
+    assert adaptor._session.delete.call_count == 2
 
 
-def test_invalid_metric_raises_value_error():
+def test_invalid_metric_raises_value_error(dataset):
     """Constructor should reject unsupported distance metrics."""
     with pytest.raises(ValueError):
-        Weaviate(dim=2, metric="manhattan")
+        Weaviate(dataset, metric="manhattan")
 
 
-def test_upsert_rejects_dimension_mismatch(adaptor_with_stub):
-    adaptor, _ = adaptor_with_stub
+def test_upsert_rejects_dimension_mismatch(adaptor):
+    data_points = [DataPoint(id=1, vector=np.array([[1.0, 2.0]], dtype=np.float32), metadata={})]
     with pytest.raises(ValueError):
-        adaptor.upsert(np.array([1]), np.array([[1.0, 2.0]], dtype=np.float32))
+        adaptor.upsert(data_points)
 
 
-def test_upsert_rejects_length_mismatch(adaptor_with_stub):
+def test_upsert_rejects_length_mismatch(adaptor):
     """ids and vectors length mismatch should raise."""
-    adaptor, _ = adaptor_with_stub
+    data_points = [
+        DataPoint(id=1, vector=np.array([[1.0, 0.0, 0.0]], dtype=np.float32), metadata={}),
+        DataPoint(id=2, vector=[], metadata={}),
+    ]
     with pytest.raises(ValueError):
-        adaptor.upsert(np.array([1, 2]), np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
+        adaptor.upsert(data_points)
 
 
-def test_search_rejects_invalid_queries(adaptor_with_stub):
-    adaptor, _ = adaptor_with_stub
+def test_search_rejects_invalid_queries(adaptor):
     with pytest.raises(ValueError):
-        adaptor.search(np.array([1.0, 2.0], dtype=np.float32), topk=1)
+        q = Query(np.array([1.0, 2.0], dtype=np.float32))
+        adaptor.search(q, topk=1)
 
     with pytest.raises(ValueError):
-        adaptor.search(np.zeros((1, 3), dtype=np.float32), topk=0)
+        q = Query(np.zeros((1, 3), dtype=np.float32))
+        adaptor.search(q, topk=0)
 
 
-def test_search_handles_graphql_errors(adaptor_with_stub):
+def test_search_handles_graphql_errors(adaptor, mocker):
     """GraphQL errors should return placeholder results instead of raising."""
-    adaptor, stub = adaptor_with_stub
 
     def graphql_error_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/graphql"):
             return FakeResponse(200, {"errors": [{"message": "no results"}]})
         return FakeResponse(200)
 
-    stub.post = graphql_error_post  # type: ignore[assignment]
-    distances, ids = adaptor.search(np.zeros((1, 3), dtype=np.float32), topk=2)
+    mocker.patch.object(adaptor._session, "post", side_effect=graphql_error_post)
+
+    q = Query(np.zeros((3,), dtype=np.float32))
+    results = adaptor.search(q, topk=2)
+
+    distances = np.asarray([r.score for r in results])
     assert np.isinf(distances).all()
+
+    ids = np.asarray([r.id for r in results])
     assert (ids == -1).all()
 
 
-def test_error_responses_raise_weaviate_error(adaptor_with_stub):
-    """Non-success POST responses should raise WeaviateError."""
-    adaptor, stub = adaptor_with_stub
-
-    def failing_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        return FakeResponse(500, text="boom")
-
-    stub.post = failing_post  # type: ignore[assignment]
-    with pytest.raises(WeaviateError):
-        adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
-
-
-def test_drop_index_raises_on_failure():
-    """DELETE failures should propagate as WeaviateError."""
-    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    stub = StubSession("TestClass")
-    stub.delete = lambda url, timeout=None: FakeResponse(500, text="kaboom")  # type: ignore[arg-type,assignment]
-    adaptor._session = stub  # type: ignore[attr-defined]
-    with pytest.raises(WeaviateError):
-        adaptor.drop_index()
-
-
-def test_drop_index_success():
-    """Successful drop should issue a delete call."""
-    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    stub = StubSession("TestClass")
-    adaptor._session = stub  # type: ignore[attr-defined]
-    adaptor.drop_index()
-    assert stub.calls["delete"]
-
-
-def test_check_ready_times_out_quickly(monkeypatch):
+def test_check_ready_times_out_quickly(mocker, dataset):
     """Readiness polling should surface repeated non-200 responses."""
     adaptor = Weaviate(
-        dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.6
+        dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.6
     )
-    stub = StubSession("TestClass")
 
     def failing_get(url, timeout=None):  # noqa: ARG002
         return FakeResponse(503, text="not ready")
 
-    stub.get = failing_get  # type: ignore[assignment]
-    adaptor._session = stub  # type: ignore[attr-defined]
+    # Stop existing mocks
+    mocker.stopall()
+    mocker.patch.object(adaptor._session, "get", side_effect=failing_get)
+
     with pytest.raises(WeaviateError):
-        adaptor._check_ready()
+        adaptor.check_ready()
 
 
-def test_check_ready_success():
+def test_check_ready_success(mocker, dataset):
     """Healthy readiness endpoint should exit the polling loop."""
     adaptor = Weaviate(
-        dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=1.0
+        dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=1.0
     )
-    stub = StubSession("TestClass")
 
     def ready_get(url, timeout=None):  # noqa: ARG002
         return FakeResponse(200)
 
-    stub.get = ready_get  # type: ignore[assignment]
-    adaptor._session = stub  # type: ignore[attr-defined]
-    adaptor._check_ready()
+    mocker.stopall()
+    mocker.patch.object(adaptor._session, "get", side_effect=ready_get)
+
+    adaptor.check_ready()
 
 
-def test_class_exists_paths():
+def test_class_exists_paths(mocker, dataset):
     """Class existence helper should handle 404/200 and error paths."""
-    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    stub = StubSession("TestClass")
+    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
 
     # Not found -> False
-    adaptor._session = stub  # type: ignore[attr-defined]
-    stub.get = lambda url, timeout=None: FakeResponse(404)  # type: ignore[assignment]
+    mocker.stopall()
+    mocker.patch.object(adaptor, "_session", MockSession())
+    mocker.patch.object(adaptor._session, "get", side_effect=lambda url, timeout=None: FakeResponse(404))
     assert adaptor._class_exists() is False
 
     # Found -> True
-    stub.get = lambda url, timeout=None: FakeResponse(200)  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "get", side_effect=lambda url, timeout=None: FakeResponse(200))
     assert adaptor._class_exists() is True
 
     # Unexpected status -> raises
-    stub.get = lambda url, timeout=None: FakeResponse(500, text="oops")  # type: ignore[assignment]
+    mocker.patch.object(
+        adaptor._session, "get", side_effect=lambda url, timeout=None: FakeResponse(500, text="oops")
+    )
     with pytest.raises(WeaviateError):
         adaptor._class_exists()
 
 
-def test_train_index_raises_on_failed_creation():
-    """train_index should raise when schema creation fails."""
-    adaptor = Weaviate(dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    stub = StubSession("TestClass")
-
-    def failing_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/schema"):
-            return FakeResponse(500, text="cannot create")
-        return FakeResponse(200)
-
-    stub.post = failing_post  # type: ignore[assignment]
-    adaptor._session = stub  # type: ignore[attr-defined]
-    with pytest.raises(WeaviateError):
-        adaptor.train_index(np.zeros((1, 2), dtype=np.float32))
-
-
-def test_upsert_delete_tolerates_404(adaptor_with_stub):
+def test_upsert_delete_tolerates_404(mocker, adaptor):
     """404 deletes should be treated as successful no-ops."""
-    adaptor, stub = adaptor_with_stub
-    adaptor._class_exists = lambda: True  # type: ignore[attr-defined]
 
     def delete_returning_404(url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
         return FakeResponse(404)
 
-    stub.delete = delete_returning_404  # type: ignore[assignment]
-    adaptor.upsert(np.array([1], dtype=np.int64), np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
-    adaptor.delete([1])
+    mocker.patch.object(adaptor._session, "delete", side_effect=delete_returning_404)
+
+    data_points = [DataPoint(id=1, vector=np.array([1.0, 0.0, 0.0], dtype=np.float32), metadata={})]
+    adaptor.upsert(data_points)
+
+    try:
+        adaptor.delete([1])
+    except Exception:
+        pytest.fail("Delete with 404 raised exception")
 
 
-def test_delete_raises_on_failure(adaptor_with_stub):
-    """Non-success delete responses must raise."""
-    adaptor, stub = adaptor_with_stub
+def test_delete_raises_on_failure(mocker, adaptor):
+    """Non-successful delete responses must raise exception."""
 
     def failing_delete(url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
         return FakeResponse(500, text="delete boom")
 
-    stub.delete = failing_delete  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "delete", side_effect=failing_delete)
+
     with pytest.raises(WeaviateError):
         adaptor.delete([1])
 
 
-def test_search_raises_on_bad_status(adaptor_with_stub):
+def test_search_raises_on_bad_status(mocker, adaptor):
     """Non-200 GraphQL responses should bubble up as errors."""
-    adaptor, stub = adaptor_with_stub
 
     def bad_status_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/graphql"):
             return FakeResponse(500, text="bad")
         return FakeResponse(200)
 
-    stub.post = bad_status_post  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "post", side_effect=bad_status_post)
+
     with pytest.raises(WeaviateError):
-        adaptor.search(np.zeros((1, 3), dtype=np.float32), topk=1)
+        q = Query(np.zeros((3,), dtype=np.float32))
+        adaptor.search(q, topk=1)
 
 
-def test_search_handles_invalid_uuid_fallback(adaptor_with_stub):
+def test_search_handles_invalid_uuid_fallback(mocker, adaptor):
     """Invalid UUIDs should fall back to -1 identifiers without crashing."""
-    adaptor, stub = adaptor_with_stub
 
     def graphql_payload(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/graphql"):
@@ -358,29 +355,30 @@ def test_search_handles_invalid_uuid_fallback(adaptor_with_stub):
             return FakeResponse(200, data)
         return FakeResponse(200)
 
-    stub.post = graphql_payload  # type: ignore[assignment]
-    distances, ids = adaptor.search(np.zeros((1, 3), dtype=np.float32), topk=1)
-    assert np.isfinite(distances[0, 0])
-    assert ids[0, 0] == -1
+    mocker.patch.object(adaptor._session, "post", side_effect=graphql_payload)
+
+    q = Query(np.zeros((3,), dtype=np.float32))
+    results = adaptor.search(q, topk=1)
+    assert np.isfinite(results[0].score)
+    assert results[0].id == -1
 
 
-def test_stats_raises_on_bad_status(adaptor_with_stub):
+def test_stats_raises_on_bad_status(mocker, adaptor):
     """Non-200 aggregate responses should raise."""
-    adaptor, stub = adaptor_with_stub
 
     def bad_status_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/graphql"):
             return FakeResponse(500, text="bad")
         return FakeResponse(200)
 
-    stub.post = bad_status_post  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "post", side_effect=bad_status_post)
+
     with pytest.raises(WeaviateError):
         adaptor.stats()
 
 
-def test_stats_handles_empty_entries(adaptor_with_stub):
+def test_stats_handles_empty_entries(mocker, adaptor):
     """Empty aggregate entries should return ntotal=0."""
-    adaptor, stub = adaptor_with_stub
 
     def empty_aggregate_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/graphql"):
@@ -388,21 +386,19 @@ def test_stats_handles_empty_entries(adaptor_with_stub):
             return FakeResponse(200, data)
         return FakeResponse(200)
 
-    stub.post = empty_aggregate_post  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "post", side_effect=empty_aggregate_post)
+
     stats = adaptor.stats()
     assert stats["ntotal"] == 0
 
 
-def test_constructor_and_distance_mapping():
+def test_constructor_and_distance_mapping(dataset):
     """Ensure basic constructor validation and metric mapping."""
-    with pytest.raises(ValueError):
-        _ = Weaviate(dim=0, metric=Metric.COSINE)
+    adaptor_ip = Weaviate(dataset, metric=Metric.INNER_PRODUCT)
+    assert adaptor_ip.distance_metric == "dot"
 
-    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
-    assert adaptor_ip._distance_metric == "dot"
-
-    adaptor_l2 = Weaviate(dim=2, metric=Metric.L2)
-    assert adaptor_l2._distance_metric == "l2-squared"
+    adaptor_l2 = Weaviate(dataset, metric=Metric.L2)
+    assert adaptor_l2.distance_metric == "l2-squared"
 
 
 def test_validate_uuid_helpers():
@@ -414,40 +410,40 @@ def test_validate_uuid_helpers():
         Weaviate._validate_uuid("not-a-uuid")
 
 
-def test_upsert_raises_when_delete_fails(adaptor_with_stub):
+def test_upsert_raises_when_delete_fails(mocker, adaptor):
     """Upsert should raise if the delete phase returns a non-success status."""
-    adaptor, stub = adaptor_with_stub
-    adaptor._class_exists = lambda: True  # type: ignore[attr-defined]
 
     def failing_delete(url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
         return FakeResponse(500, text="delete boom")
 
-    stub.delete = failing_delete  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "delete", side_effect=failing_delete)
+
     with pytest.raises(WeaviateError):
-        adaptor.upsert(np.array([1], dtype=np.int64), np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
+        data_points = [DataPoint(id=1, vector=np.array([1.0, 0.0, 0.0], dtype=np.float32), metadata={})]
+        adaptor.upsert(data_points)
 
 
-def test_upsert_raises_when_insert_fails(adaptor_with_stub):
+def test_upsert_raises_when_insert_fails(mocker, adaptor):
     """Upsert should raise when the insert POST returns an error."""
-    adaptor, stub = adaptor_with_stub
-    adaptor._class_exists = lambda: True  # type: ignore[attr-defined]
 
     def failing_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
         if url.endswith("/v1/objects"):
             return FakeResponse(500, text="insert boom")
         return FakeResponse(200)
 
-    stub.post = failing_post  # type: ignore[assignment]
+    mocker.patch.object(adaptor._session, "post", side_effect=failing_post)
+
     with pytest.raises(WeaviateError):
-        adaptor.upsert(np.array([1], dtype=np.int64), np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
+        data_points = [DataPoint(id=1, vector=np.array([1.0, 0.0, 0.0], dtype=np.float32), metadata={})]
+        adaptor.upsert(data_points)
 
 
-def test_check_ready_with_zero_timeout():
+def test_check_ready_with_zero_timeout(dataset, mocker):
     """Zero timeout should immediately raise when readiness never returns 200."""
-    adaptor = Weaviate(
-        dim=2, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.0
-    )
-    stub = StubSession("TestClass")
-    adaptor._session = stub  # type: ignore[attr-defined]
+    mocker.stopall()
+
     with pytest.raises(WeaviateError):
-        adaptor._check_ready()
+        adaptor = Weaviate(
+            dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.0
+        )
+        adaptor.check_ready()

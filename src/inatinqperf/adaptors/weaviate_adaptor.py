@@ -11,7 +11,7 @@ import requests
 from loguru import logger
 from requests import Response, Session
 
-from inatinqperf.adaptors.base import VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
 
 
@@ -26,7 +26,7 @@ class Weaviate(VectorDatabase):
 
     def __init__(
         self,
-        dim: int,
+        dataset: HuggingFaceDataset,
         metric: str = Metric.COSINE,
         *,
         base_url: str = "http://localhost:8080",
@@ -34,12 +34,12 @@ class Weaviate(VectorDatabase):
         timeout: float = 10.0,
         vectorizer: str = "none",
     ) -> None:
-        super().__init__()
-        if dim <= 0:
+        super().__init__(dataset, metric)
+
+        if self.dim <= 0:
             msg = "Vector dimensionality must be positive."
             raise ValueError(msg)
 
-        self.dim = int(dim)
         self.metric = metric
         self.base_url = base_url.rstrip("/")
         self.class_name = class_name
@@ -53,19 +53,28 @@ class Weaviate(VectorDatabase):
         self._graphql_endpoint = f"{self.base_url}/v1/graphql"
         self._ready_endpoint = f"{self.base_url}/v1/.well-known/ready"
 
+        self._configure()
+
         logger.info(
-            f"""[WeaviateAdaptor] Initialized class='{self.class_name}' """
+            f"""[WeaviateAdaptor] Initialized class={self.class_name} """
             f"""base_url={self.base_url} dim={self.dim} metric={self.metric.value}"""
         )
+
+    @property
+    def distance_metric(self) -> str:
+        """The distance metric to use for similarity search."""
+        return self._distance_metric
 
     # ------------------------------------------------------------------
     # VectorDatabase implementation
     # ------------------------------------------------------------------
-    def train_index(self, x_train: np.ndarray) -> None:  # noqa: ARG002 - interface contract
-        """Ensure that the Weaviate class exists before ingest."""
-        self._check_ready()
+    def _configure(self) -> None:
+        """Ensure that the Weaviate class exists before ingesting data."""
+        self.check_ready()
+
         if self._class_exists():
             return
+
         payload = {
             "class": self.class_name,
             "description": "Collection managed by iNatInqPerf",
@@ -84,6 +93,7 @@ class Weaviate(VectorDatabase):
             ],
         }
         response = self._session.post(self._schema_endpoint, json=payload, timeout=self.timeout)
+
         if response.status_code not in {HTTPStatus.OK, HTTPStatus.CREATED}:
             # Weaviate returns 422 if class already exists - handle gracefully.
             if (
@@ -93,30 +103,27 @@ class Weaviate(VectorDatabase):
                 logger.info(f"[WeaviateAdaptor] Class {self.class_name} already exists.")
                 return
             self._raise_error("failed to create class", response)
+
         logger.info(
             f"""[WeaviateAdaptor] Created class={self.class_name} """
             f"""(distance={self._distance_metric} vectorizer={self.vectorizer})"""
         )
 
-    def drop_index(self) -> None:
-        """Delete the underlying Weaviate class."""
-        response = self._session.delete(f"{self._schema_endpoint}/{self.class_name}", timeout=self.timeout)
-        if response.status_code not in {HTTPStatus.OK, HTTPStatus.NO_CONTENT, HTTPStatus.NOT_FOUND}:
-            self._raise_error("failed to delete class", response)
-        logger.info(f"[WeaviateAdaptor] Dropped class {self.class_name}")
-
-    def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
+    def upsert(self, x: Sequence[DataPoint]) -> None:
         """Insert or update vectors in Weaviate."""
-        ids = np.asarray(ids).astype(np.int64)
-        vectors = np.asarray(x, dtype=np.float32)
+        ids, vectors = np.empty((len(x),), dtype=np.int64), np.empty((len(x), self.dim), dtype=np.float32)
+        for i, d in enumerate(x):
+            ids[i] = d.id
+            vectors[i] = np.asarray(d.vector, dtype=np.float32)
+
         if vectors.ndim != self.INATINQ_WEVIATE_QUERY_DIM or vectors.shape[1] != self.dim:
             msg = "Vectors must be 2-D with shape (n, dim)."
             raise ValueError(msg)
+
         if ids.shape[0] != vectors.shape[0]:
             msg = "ids and vectors must have matching length"
             raise ValueError(msg)
 
-        self.train_index(vectors)
         # Prefer best-effort ingestion: we validate matching lengths above, but leave
         # strict=False so late mismatches drop extras instead of aborting the batch.
         for identifier, vector in zip(ids, vectors, strict=False):
@@ -138,52 +145,52 @@ class Weaviate(VectorDatabase):
             if response.status_code not in {200, 201}:
                 self._raise_error("failed to upsert object", response)
 
-    def search(self, q: np.ndarray, topk: int, **kwargs: object) -> tuple[np.ndarray, np.ndarray]:
+    def search(self, q: Query, topk: int, **_: object) -> Sequence[SearchResult]:
         """Run nearest-neighbor search using GraphQL."""
         if topk <= 0:
             msg = "topk must be positive"
             raise ValueError(msg)
 
-        queries = np.asarray(q, dtype=np.float32)
-        if queries.ndim != self.INATINQ_WEVIATE_QUERY_DIM or queries.shape[1] != self.dim:
-            msg = "Query vectors must be 2-D with correct dimensionality"
+        query_vector = np.asarray(q.vector, dtype=np.float32)
+
+        if query_vector.ndim > 1 or query_vector.shape[0] != self.dim:
+            msg = "Query vectors must be 1-D with correct dimensionality"
             raise ValueError(msg)
 
-        limit = topk
-        n_queries = queries.shape[0]
-        distances = np.full((n_queries, limit), np.inf, dtype=np.float32)
-        ids = np.full((n_queries, limit), -1, dtype=np.int64)
+        vector_json = json.dumps(query_vector.tolist())
+        query_str = (
+            "{\n  Get {\n    "
+            f"{self.class_name}(nearVector: {{ vector: {vector_json} }}, limit: {topk}) "
+            "{\n      originalId\n      _additional { id distance }\n    }\n  }\n}"
+        )
+        payload = {"query": query_str}
+        response = self._session.post(self._graphql_endpoint, json=payload, timeout=self.timeout)
 
-        if kwargs:
-            logger.debug(f"[WeaviateAdaptor] Ignoring unused search kwargs: {kwargs}")
+        if response.status_code != HTTPStatus.OK:
+            self._raise_error("search request failed", response)
 
-        for row, vec in enumerate(queries):
-            vector_json = json.dumps(vec.tolist())
-            query_str = (
-                "{\n  Get {\n    "
-                f"{self.class_name}(nearVector: {{ vector: {vector_json} }}, limit: {limit}) "
-                "{\n      originalId\n      _additional { id distance }\n    }\n  }\n}"
-            )
-            payload = {"query": query_str}
-            response = self._session.post(self._graphql_endpoint, json=payload, timeout=self.timeout)
-            if response.status_code != HTTPStatus.OK:
-                self._raise_error("search request failed", response)
-            data = response.json()
-            results = self._extract_results(data)
-            for col, result in enumerate(results[:limit]):
-                additional = result.get("_additional", {})
-                distance = float(additional.get("distance", float("inf")))
-                id_str = additional.get("id")
-                original = result.get("originalId")
-                if original is not None:
-                    ids[row, col] = int(original)
-                else:
-                    try:
-                        ids[row, col] = self._validate_uuid(id_str) if id_str is not None else -1
-                    except ValueError:
-                        ids[row, col] = -1
-                distances[row, col] = distance
-        return distances, ids
+        data = response.json()
+        results = self._extract_results(data)
+
+        search_results = []
+
+        for result in results[:topk]:
+            additional = result.get("_additional", {})
+            distance = float(additional.get("distance", "inf"))
+            id_str = additional.get("id")
+            original = result.get("originalId")
+            if original is not None:
+                data_id = int(original)
+
+            else:
+                try:
+                    data_id = self._validate_uuid(id_str) if id_str is not None else -1
+                except ValueError:
+                    data_id = -1
+
+            search_results.append(SearchResult(id=data_id, score=distance))
+
+        return search_results
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete objects for the provided identifiers."""
@@ -219,7 +226,8 @@ class Weaviate(VectorDatabase):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _check_ready(self) -> None:
+    def check_ready(self) -> None:
+        """Check if instance is ready for operations."""
         deadline = time.time() + self.timeout
         last_response: Response | None = None
         while time.time() < deadline:

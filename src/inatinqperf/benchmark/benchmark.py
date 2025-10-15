@@ -1,7 +1,6 @@
 """Vector database-agnostic benchmark orchestrator."""
 
 import time
-from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +10,7 @@ from datasets import Dataset
 from loguru import logger
 
 from inatinqperf.adaptors import VECTORDBS
-from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, Query, VectorDatabase
 from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils import Profiler, get_table
@@ -160,8 +159,10 @@ class Benchmarker:
             i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
             for i in tqdm.tqdm(range(q.shape[0])):
                 base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
-                padded = _ids_to_fixed_array(base_results, topk)
-                i0[i] = padded
+                row = np.full(topk, -1.0, dtype=float)
+                for j, result in enumerate(base_results[:topk]):
+                    row[j] = float(result.id)
+                i0[i] = row
 
         # search + profile
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
@@ -179,8 +180,10 @@ class Benchmarker:
         i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
         for i in tqdm.tqdm(range(q.shape[0])):
             results = vectordb.search(Query(q[i]), topk, **params.to_dict())
-            padded = _ids_to_fixed_array(results, topk)
-            i1[i] = padded
+            row = np.full(topk, -1.0, dtype=float)
+            for j, result in enumerate(results[:topk]):
+                row[j] = float(result.id)
+            i1[i] = row
         rec = recall_at_k(i1, i0, topk)
 
         x = np.asarray(dataset["embedding"], dtype=np.float32)
@@ -258,15 +261,3 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     for i in range(approx_i.shape[0]):
         hits += len(set(approx_i[i, :k]).intersection(set(exact_i[i, :k])))
     return hits / float(approx_i.shape[0] * k)
-
-
-def _ids_to_fixed_array(results: Sequence[SearchResult], topk: int) -> np.ndarray:
-    """Convert a list of SearchResult objects into a fixed-length array."""
-
-    arr = np.full(topk, -1.0, dtype=float)
-    if not results:
-        return arr
-
-    count = min(topk, len(results))
-    arr[:count] = [float(results[i].id) for i in range(count)]
-    return arr

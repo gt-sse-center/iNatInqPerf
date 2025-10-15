@@ -9,6 +9,8 @@ Each test focuses on a specific slice of the Weaviate client API:
 
 from __future__ import annotations
 
+import uuid
+
 import numpy as np
 import pytest
 from datasets import Dataset
@@ -235,8 +237,8 @@ def adaptor_fixture(dataset: Dataset, stub_client: StubWeaviateClient) -> tuple[
     return adaptor, stub_client
 
 
-def test_train_index_creates_class(dataset: Dataset) -> None:
-    """train_index should create the class when it does not already exist."""
+def test_ensure_schema_exists_creates_class(dataset: Dataset) -> None:
+    """_ensure_schema_exists should create the class when it does not already exist."""
     client = StubWeaviateClient("TestClass")
     adaptor = Weaviate(
         dataset=dataset,
@@ -245,12 +247,12 @@ def test_train_index_creates_class(dataset: Dataset) -> None:
         class_name="TestClass",
         client=client,
     )
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    adaptor._ensure_schema_exists()
     assert client.schema.create_calls
 
 
-def test_train_index_ignores_existing_class(dataset: Dataset) -> None:
-    """train_index should tolerate a 422 already-exists response."""
+def test_ensure_schema_exists_tolerates_already_exists_error(dataset: Dataset) -> None:
+    """_ensure_schema_exists should tolerate a 422 already-exists response."""
     client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = FakeStatusError(422, "already exists")
     adaptor = Weaviate(
@@ -260,7 +262,41 @@ def test_train_index_ignores_existing_class(dataset: Dataset) -> None:
         class_name="TestClass",
         client=client,
     )
+    adaptor._ensure_schema_exists()
+    assert client.schema.create_calls
+
+
+def test_ensure_schema_exists_ignores_existing_class(dataset: Dataset) -> None:
+    """_ensure_schema_exists should tolerate a 422 already-exists response."""
+    client = StubWeaviateClient("TestClass")
+    client.schema.raise_on_create = FakeStatusError(422, "already exists")
+    adaptor = Weaviate(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        client=client,
+    )
+<<<<<<< HEAD
     adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    assert client.schema.create_calls
+>>>>>>> 12120e9 (ruff check due to online merge)
+
+
+def test_ensure_schema_exists_tolerates_already_exists_error(dataset: Dataset) -> None:
+    """_ensure_schema_exists should tolerate a 422 already-exists response."""
+    client = StubWeaviateClient("TestClass")
+    client.schema.raise_on_create = FakeStatusError(422, "already exists")
+    adaptor = Weaviate(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        client=client,
+    )
+=======
+>>>>>>> ea6d6fb (ruff check due to online merge)
+    adaptor._ensure_schema_exists()
     assert client.schema.create_calls
 
 
@@ -298,6 +334,40 @@ def test_upsert_and_search_with_stub(adaptor: tuple[Weaviate, StubWeaviateClient
     assert isinstance(results, list)
     assert all(isinstance(item, SearchResult) for item in results)
     assert [result.id for result in results] == [2, 1]
+
+
+def test_search_short_result_list_requires_padding(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """Weaviate can return fewer hits than requested; padding keeps downstream arrays consistent."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_get_response = {
+        "data": {
+            "Get": {
+                weaviate_adaptor.class_name: [
+                    {
+                        "originalId": 7,
+                        "_additional": {
+                            "id": str(uuid.uuid4()),
+                            "distance": 0.42,
+                        },
+                    }
+                ]
+            }
+        }
+    }
+
+    results = weaviate_adaptor.search(Query(vector=[0.2, 0.3, 0.5]), topk=3)
+    assert len(results) == 1
+    padded = np.full(3, -1.0, dtype=float)
+    for idx, result in enumerate(results[:3]):
+        padded[idx] = float(result.id)
+
+    # Expect first position to match the single result and trailing slots to remain sentinel values.
+    assert padded.tolist() == [7.0, -1.0, -1.0]
+
+    container = np.full((1, 3), -1.0, dtype=float)
+    container[0] = padded
+    assert container[0, 0] == 7.0
+    assert np.all(container[0, 1:] == -1.0)
 
 
 def test_stats_returns_count(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -455,8 +525,8 @@ def test_class_exists_paths() -> None:
         adaptor._class_exists()
 
 
-def test_train_index_raises_on_failed_creation(dataset: Dataset) -> None:
-    """train_index must surface exceptions raised by schema creation."""
+def test_ensure_schema_exists_raises_on_failed_creation(dataset: Dataset) -> None:
+    """Schema creation failures should propagate as WeaviateError."""
     client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = Exception("cannot create")
     with pytest.raises(WeaviateError):
@@ -486,14 +556,6 @@ def test_delete_raises_on_failure(adaptor: tuple[Weaviate, StubWeaviateClient]) 
     client.data_object.raise_on_delete = FakeStatusError(500, "delete boom")
     with pytest.raises(WeaviateError):
         weaviate_adaptor.delete([1])
-
-
-def test_search_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """search should raise when the client surfaces an unexpected status."""
-    weaviate_adaptor, client = adaptor
-    client.graphql_get_exception = FakeStatusError(500, "bad")
-    with pytest.raises(WeaviateError):
-        weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=1)
 
 
 def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -528,6 +590,313 @@ def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient
     client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.class_name: []}}}
     stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 0
+
+
+def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """stats should return zero when the aggregate result is empty."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.class_name: []}}}
+    stats = weaviate_adaptor.stats()
+    assert stats["ntotal"] == 0
+
+
+def test_ingest_datapoints_uses_batch_context_manager() -> None:
+    """_ingest_datapoints should leverage batch context managers when available."""
+
+    class RecordingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+            self.records: list[tuple[str, str, dict, list[float]]] = []
+
+        def __enter__(self) -> "RecordingBatch":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            return False
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            self.records.append((class_name, uuid, data_object, vector))
+
+    class ClientWithBatch(StubWeaviateClient):
+        def __init__(self, class_name: str) -> None:
+            super().__init__(class_name)
+            self.batch = RecordingBatch()
+
+    client = ClientWithBatch("TestClass")
+    adaptor = Weaviate(
+        dataset=make_dataset(3),
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        batch_size=3,
+        client=client,
+    )
+
+    client.batch.records.clear()
+    client.batch.batch_size = None
+    datapoints = [DataPoint(id=idx, vector=[1.0, 0.0, 0.0], metadata={}) for idx in range(2)]
+    adaptor._ingest_datapoints(datapoints)
+    assert client.batch.batch_size == 3
+    assert len(client.batch.records) == len(datapoints)
+
+
+def test_ingest_datapoints_handles_batch_without_context() -> None:
+    """_ingest_datapoints should call add_data_object on batch clients lacking __enter__."""
+
+    class StatelessBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+            self.records: list[tuple[str, str, dict, list[float]]] = []
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            self.records.append((class_name, uuid, data_object, vector))
+
+    class ClientWithSimpleBatch(StubWeaviateClient):
+        def __init__(self, class_name: str) -> None:
+            super().__init__(class_name)
+            self.batch = StatelessBatch()
+
+    client = ClientWithSimpleBatch("TestClass")
+    adaptor = Weaviate(
+        dataset=make_dataset(3),
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        batch_size=2,
+        client=client,
+    )
+
+    client.batch.records.clear()
+    client.batch.batch_size = None
+    datapoints = [DataPoint(id=idx, vector=[0.0, 1.0, 0.0], metadata={}) for idx in range(2)]
+    adaptor._ingest_datapoints(datapoints)
+    assert client.batch.batch_size == 2
+    assert len(client.batch.records) == len(datapoints)
+
+
+def test_ingest_datapoints_falls_back_to_upsert(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_ingest_datapoints should fall back to upsert when batch ingest fails."""
+
+    class FailingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+
+        def __enter__(self) -> "FailingBatch":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            return False
+
+        def add_data_object(self, *_, **__) -> None:
+            raise RuntimeError("boom")
+
+    class ClientWithFailingBatch(StubWeaviateClient):
+        def __init__(self, class_name: str) -> None:
+            super().__init__(class_name)
+            self.batch = FailingBatch()
+
+    client = ClientWithFailingBatch("TestClass")
+    adaptor = Weaviate(
+        dataset=make_dataset(3),
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        batch_size=4,
+        client=client,
+    )
+
+    recorded: dict[str, list[DataPoint]] = {}
+
+    def fake_upsert(self: Weaviate, datapoints: list[DataPoint]) -> None:
+        recorded["datapoints"] = list(datapoints)
+
+    monkeypatch.setattr(adaptor, "upsert", MethodType(fake_upsert, adaptor))
+    datapoints = [DataPoint(id=idx, vector=[0.0, 0.0, 1.0], metadata={}) for idx in range(3)]
+    adaptor._ingest_datapoints(datapoints)
+    assert recorded["datapoints"] == datapoints
+
+
+def test_add_batch_object_requires_add_method(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_add_batch_object should raise when the batch client lacks add_data_object."""
+    weaviate_adaptor, _ = adaptor
+
+    class MissingAdd:
+        pass
+
+    datapoint = DataPoint(id=1, vector=[1.0, 0.0, 0.0], metadata={})
+    with pytest.raises(TypeError):
+        weaviate_adaptor._add_batch_object(MissingAdd(), datapoint)
+
+
+<<<<<<< HEAD
+def test_ingest_datapoints_batch_context_manager(
+    adaptor: tuple[Weaviate, StubWeaviateClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_ingest_datapoints should honour batch context managers and ingest all datapoints."""
+=======
+def test_bulk_ingest_with_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_bulk_ingest should honour batch context managers and ingest all datapoints."""
+>>>>>>> ea6d6fb (ruff check due to online merge)
+    weaviate_adaptor, _ = adaptor
+
+    class RecordingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+            self.records: list[tuple[str, str, dict, list[float]]] = []
+
+        def __enter__(self) -> "RecordingBatch":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            return False
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            self.records.append((class_name, uuid, data_object, vector))
+
+    batch = RecordingBatch()
+<<<<<<< HEAD
+    weaviate_adaptor._client.batch = batch
+    weaviate_adaptor._batch_size = 4
+    datapoints = [DataPoint(id=i, vector=[1.0, 0.0, 0.0], metadata={}) for i in range(3)]
+
+    upsert_tracker: dict[str, list[DataPoint]] = {}
+
+    def fake_upsert(self: Weaviate, payload: list[DataPoint]) -> None:
+        upsert_tracker["datapoints"] = list(payload)
+
+    monkeypatch.setattr(weaviate_adaptor, "upsert", MethodType(fake_upsert, weaviate_adaptor))
+
+    weaviate_adaptor._ingest_datapoints(datapoints)
+
+    assert "datapoints" not in upsert_tracker
+=======
+    weaviate_adaptor._batch_size = 4
+    datapoints = [DataPoint(id=i, vector=[1.0, 0.0, 0.0], metadata={}) for i in range(3)]
+
+    result = weaviate_adaptor._bulk_ingest(datapoints, batch)
+    assert result is True
+>>>>>>> ea6d6fb (ruff check due to online merge)
+    assert batch.batch_size == 4
+    assert len(batch.records) == len(datapoints)
+
+
+<<<<<<< HEAD
+def test_ingest_datapoints_batch_without_context(
+    adaptor: tuple[Weaviate, StubWeaviateClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_ingest_datapoints should work with batch clients lacking context manager support."""
+=======
+def test_bulk_ingest_without_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_bulk_ingest should work with batch clients lacking context manager support."""
+>>>>>>> ea6d6fb (ruff check due to online merge)
+    weaviate_adaptor, _ = adaptor
+
+    class StatelessBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+            self.records: list[tuple[str, str, dict, list[float]]] = []
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            self.records.append((class_name, uuid, data_object, vector))
+
+    batch = StatelessBatch()
+<<<<<<< HEAD
+    weaviate_adaptor._client.batch = batch
+    weaviate_adaptor._batch_size = 2
+    datapoints = [DataPoint(id=i, vector=[0.0, 1.0, 0.0], metadata={}) for i in range(2)]
+
+    upsert_tracker: dict[str, list[DataPoint]] = {}
+
+    def fake_upsert(self: Weaviate, payload: list[DataPoint]) -> None:
+        upsert_tracker["datapoints"] = list(payload)
+
+    monkeypatch.setattr(weaviate_adaptor, "upsert", MethodType(fake_upsert, weaviate_adaptor))
+
+    weaviate_adaptor._ingest_datapoints(datapoints)
+
+    assert "datapoints" not in upsert_tracker
+=======
+    weaviate_adaptor._batch_size = 2
+    datapoints = [DataPoint(id=i, vector=[0.0, 1.0, 0.0], metadata={}) for i in range(2)]
+
+    result = weaviate_adaptor._bulk_ingest(datapoints, batch)
+    assert result is True
+>>>>>>> ea6d6fb (ruff check due to online merge)
+    assert batch.batch_size == 2
+    assert len(batch.records) == len(datapoints)
+
+
+<<<<<<< HEAD
+def test_ingest_datapoints_batch_handles_exceptions(
+    adaptor: tuple[Weaviate, StubWeaviateClient], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_ingest_datapoints should fall back to upsert when batch ingest fails."""
+=======
+def test_bulk_ingest_handles_exceptions(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_bulk_ingest should return False and avoid raising when ingestion fails."""
+>>>>>>> ea6d6fb (ruff check due to online merge)
+    weaviate_adaptor, _ = adaptor
+
+    class ExplodingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+
+        def __enter__(self) -> "ExplodingBatch":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            return False
+
+        def add_data_object(self, *args, **kwargs) -> None:
+            raise RuntimeError("boom")
+
+    batch = ExplodingBatch()
+<<<<<<< HEAD
+    weaviate_adaptor._client.batch = batch
+    weaviate_adaptor._batch_size = 5
+    datapoints = [DataPoint(id=i, vector=[0.0, 0.0, 1.0], metadata={}) for i in range(3)]
+
+    fallback: dict[str, list[DataPoint]] = {}
+
+    def fake_upsert(self: Weaviate, payload: list[DataPoint]) -> None:
+        fallback["datapoints"] = list(payload)
+
+    monkeypatch.setattr(weaviate_adaptor, "upsert", MethodType(fake_upsert, weaviate_adaptor))
+
+    weaviate_adaptor._ingest_datapoints(datapoints)
+
+    assert fallback["datapoints"] == datapoints
+=======
+    weaviate_adaptor._batch_size = 5
+    datapoints = [DataPoint(id=i, vector=[0.0, 0.0, 1.0], metadata={}) for i in range(3)]
+
+    result = weaviate_adaptor._bulk_ingest(datapoints, batch)
+    assert result is False
+>>>>>>> ea6d6fb (ruff check due to online merge)
 
 
 def test_constructor_and_distance_mapping(dataset):

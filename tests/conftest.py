@@ -8,6 +8,12 @@ import pytest
 import tqdm
 from loguru import logger
 
+# Ensure the project package is importable when running tests without installation.
+ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = ROOT / "src"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
 
 @pytest.fixture(name="source_dir")
 def source_dir_fixture():

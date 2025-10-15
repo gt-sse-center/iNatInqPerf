@@ -137,8 +137,7 @@ def test_weaviate_adaptor_lifecycle(class_name: str):
     adaptor = Weaviate(dataset=make_dataset(4), metric=Metric.COSINE, url=BASE_URL, class_name=class_name)
     adaptor.drop_index()  # ensure clean start
 
-    train = np.random.default_rng(7).standard_normal((8, 4)).astype(np.float32)
-    adaptor.train_index(train)
+    adaptor._ensure_schema_exists()
 
     ids = np.arange(100, 104, dtype=np.int64)
     vectors = np.array(
@@ -178,7 +177,7 @@ def test_weaviate_upsert_replaces_vectors(class_name: str):
     adaptor = Weaviate(dataset=make_dataset(3), metric=Metric.COSINE, url=BASE_URL, class_name=class_name)
     # Drop any leftover schema, then create a fresh one for the test.
     adaptor.drop_index()
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    adaptor._ensure_schema_exists()
 
     ids = np.array([1, 2], dtype=np.int64)
     first = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
@@ -206,7 +205,7 @@ def test_weaviate_metric_mapping(class_name: str):
         class_name=class_name,
     )
     adaptor.drop_index()
-    adaptor.train_index(np.zeros((1, 2), dtype=np.float32))
+    adaptor._ensure_schema_exists()
 
     ids = np.array([10, 11], dtype=np.int64)
     vectors = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)

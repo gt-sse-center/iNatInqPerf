@@ -1,4 +1,14 @@
-"""Adaptor for interacting with a running Weaviate instance via HTTP."""
+"""Weaviate adaptor built on top of the official client library.
+
+This adaptor keeps the surface area used by the benchmark intentionally small:
+
+* Schema management is handled through ``client.schema``.
+* Vector ingest happens via ``client.data_object`` calls.
+* Queries rely on the GraphQL endpoint exposed through ``client.query``.
+
+All interactions log high-level intent so that long-running benchmark sessions
+remain debuggable and predictable for developers.
+"""
 
 import time
 import uuid
@@ -10,18 +20,20 @@ from datasets import Dataset as HuggingFaceDataset
 from loguru import logger
 from weaviate import Client as WeaviateClient
 
-from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
 
 
 class WeaviateError(RuntimeError):
-    """Raised when Weaviate responds with an unexpected status code."""
+    """Raised when Weaviate responds with an unexpected status code or payload."""
 
 
 class Weaviate(VectorDatabase):
-    """HTTP-based adaptor that manages a single Weaviate class/collection."""
+    """Light-weight wrapper for managing a single class within a Weaviate instance."""
 
-    INATINQ_WEVIATE_QUERY_DIM = 2
+    _DEFAULT_DESCRIPTION = "Collection managed by iNatInqPerf"
+    _ORIGINAL_ID_FIELD = "originalId"
+    _EXPECTED_VECTOR_RANK = 2
 
     def __init__(
         self,
@@ -34,6 +46,7 @@ class Weaviate(VectorDatabase):
         vectorizer: str = "none",
         client: WeaviateClient | None = None,
     ) -> None:
+        """Initialise the adaptor with a dataset template and connectivity details."""
         metric_enum = metric if isinstance(metric, Metric) else Metric(metric)
         super().__init__(dataset=dataset, metric=metric_enum.value)
 
@@ -48,168 +61,164 @@ class Weaviate(VectorDatabase):
         self.vectorizer = vectorizer
         self._distance_metric = self._translate_metric(metric_enum)
 
+        # The official Weaviate client exposes the schema, data, and query APIs we rely on.
         self._client: WeaviateClient = client or WeaviateClient(
             url=self.base_url,
             timeout_config=(self.timeout, self.timeout),
         )
 
-        self._configure()
-
         logger.info(
-            f"""[WeaviateAdaptor] Initialized class='{self.class_name}' """
-            f"""base_url={self.base_url} dim={self.dim} metric={self._metric.value}"""
+            "[WeaviateAdaptor] Ready for base_url=%s class='%s' dim=%d metric=%s",
+            self.base_url,
+            self.class_name,
+            self.dim,
+            self._metric.value,
         )
-
-    @property
-    def distance_metric(self) -> str:
-        """The distance metric to use for similarity search."""
-        return self._distance_metric
 
     # ------------------------------------------------------------------
     # VectorDatabase implementation
     # ------------------------------------------------------------------
-    def _configure(self) -> None:
-        """Ensure that the Weaviate class exists before ingesting data."""
-        self.check_ready()
-
+    def train_index(self, x_train: np.ndarray) -> None:  # noqa: ARG002 - interface contract
+        """Ensure that the backing Weaviate class exists."""
+        self._check_ready()
         if self._class_exists():
             return
 
         payload = {
             "class": self.class_name,
-            "description": "Collection managed by iNatInqPerf",
+            "description": self._DEFAULT_DESCRIPTION,
             "vectorizer": self.vectorizer,
             "vectorIndexType": "hnsw",
             "vectorIndexConfig": {
+                # The benchmark toggles distance metrics; Weaviate expects these canonical names.
                 "distance": self._distance_metric,
                 "vectorCacheMaxObjects": 1_000_000,
             },
             "properties": [
                 {
-                    "name": "originalId",
+                    "name": self._ORIGINAL_ID_FIELD,
                     "description": "Original integer identifier",
                     "dataType": ["int"],
                 }
             ],
         }
-        response = self._session.post(self._schema_endpoint, json=payload, timeout=self.timeout)
 
-        if response.status_code not in {HTTPStatus.OK, HTTPStatus.CREATED}:
-            # Weaviate returns 422 if class already exists - handle gracefully.
-            if (
-                response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-                and "already exists" in response.text.lower()
-            ):
-                logger.info(f"[WeaviateAdaptor] Class {self.class_name} already exists.")
+        try:
+            self._client.schema.create_class(payload)
+        except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY and "already exists" in str(exc).lower():
+                logger.info("[WeaviateAdaptor] Class %s already exists; continuing.", self.class_name)
                 return
-            self._raise_error("failed to create class", response)
+            self._handle_exception("failed to create class", exc)
 
-        logger.info(
-            f"""[WeaviateAdaptor] Created class={self.class_name} """
-            f"""(distance={self._distance_metric} vectorizer={self.vectorizer})"""
-        )
+        logger.info("[WeaviateAdaptor] Created class=%s", self.class_name)
+
+    def drop_index(self) -> None:
+        """Delete the managed class entirely."""
+        try:
+            self._client.schema.delete_class(self.class_name)
+        except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code == HTTPStatus.NOT_FOUND:
+                logger.info("[WeaviateAdaptor] Class %s already absent.", self.class_name)
+                return
+            self._handle_exception("failed to delete class", exc)
+
+        logger.info("[WeaviateAdaptor] Dropped class=%s", self.class_name)
 
     def upsert(self, x: Sequence[DataPoint]) -> None:
-        """Insert or update vectors in Weaviate."""
-        ids, vectors = np.empty((len(x),), dtype=np.int64), np.empty((len(x), self.dim), dtype=np.float32)
-        for i, d in enumerate(x):
-            ids[i] = d.id
-            vectors[i] = np.asarray(d.vector, dtype=np.float32)
+        """Insert or update vectors and associated metadata."""
+        datapoints = list(x)
+        if not datapoints:
+            logger.debug("[WeaviateAdaptor] upsert called with empty payload; skipping.")
+            return
 
-        if vectors.ndim != self.INATINQ_WEVIATE_QUERY_DIM or vectors.shape[1] != self.dim:
-            msg = "Vectors must be 2-D with shape (n, dim)."
+        vectors = np.vstack([np.asarray(dp.vector, dtype=np.float32) for dp in datapoints])
+        if vectors.ndim != self._EXPECTED_VECTOR_RANK or vectors.shape[1] != self.dim:
+            msg = "DataPoint vectors must be 2-D with shape (n, dim)."
             raise ValueError(msg)
 
-        if ids.shape[0] != vectors.shape[0]:
-            msg = "ids and vectors must have matching length"
-            raise ValueError(msg)
-
-        # Prefer best-effort ingestion: we validate matching lengths above, but leave
-        # strict=False so late mismatches drop extras instead of aborting the batch.
-        for identifier, vector in zip(ids, vectors, strict=False):
-            obj_id = self._make_object_id(int(identifier))
-            # Delete any pre-existing object so POST remains consistent.
-            delete_resp = self._session.delete(
-                f"{self._objects_endpoint}/{self.class_name}/{obj_id}", timeout=self.timeout
-            )
-            if delete_resp.status_code not in {HTTPStatus.OK, HTTPStatus.NO_CONTENT, HTTPStatus.NOT_FOUND}:
-                self._raise_error("failed to delete existing object", delete_resp)
+        # Ensure the class exists. This is a no-op if already provisioned.
+        self.train_index(vectors)
 
         for dp, vector in zip(datapoints, vectors, strict=False):
             obj_id = self._make_object_id(int(dp.id))
             properties = dict(getattr(dp, "metadata", {}) or {})
-            properties.setdefault("originalId", int(dp.id))
+            properties.setdefault(self._ORIGINAL_ID_FIELD, int(dp.id))
 
+            try:
+                # Re-using deterministic object IDs keeps the collection idempotent.
+                self._client.data_object.delete(obj_id, class_name=self.class_name)
+            except Exception as exc:  # pragma: no cover - defensive programming
+                status_code = getattr(exc, "status_code", None)
+                if status_code != HTTPStatus.NOT_FOUND:
+                    self._handle_exception("failed to delete existing object", exc)
 
-    def search(self, q: Query, topk: int, **_: object) -> Sequence[SearchResult]:
-        """Run nearest-neighbor search using GraphQL."""
+            try:
+                self._client.data_object.create(
+                    data_object=properties,
+                    class_name=self.class_name,
+                    uuid=obj_id,
+                    vector=vector.tolist(),
+                )
+            except Exception as exc:  # pragma: no cover - defensive programming
+                self._handle_exception("failed to upsert object", exc)
+
+    def search(
+        self,
+        q: Query | Sequence[float] | np.ndarray,
+        topk: int,
+        **_: object,
+    ) -> Sequence[SearchResult]:
+        """Search for the ``topk`` nearest vectors using Weaviate's GraphQL API."""
         if topk <= 0:
             msg = "topk must be positive"
             raise ValueError(msg)
-        query_vector = np.asarray(q.vector, dtype=np.float32)
 
-        if query_vector.ndim > 1 or query_vector.shape[0] != self.dim:
-            msg = "Query vectors must be 1-D with correct dimensionality"
+        if isinstance(q, Query):
+            vector = np.asarray(q.vector, dtype=np.float32)
+            filters = q.filters
+        else:
+            vector = np.asarray(q, dtype=np.float32)
+            filters = None
+
+        if vector.ndim != 1 or vector.shape[0] != self.dim:
+            msg = "Query vector must be 1-D with dimensionality matching the index"
             raise ValueError(msg)
 
-        vector_json = json.dumps(query_vector.tolist())
-
-        if q.ndim > 1 or q.shape[0] != self.dim:
-            msg = "Query vectors must be 1-D with correct dimensionality"
-            raise ValueError(msg)
-
-        vector_json = json.dumps(q.tolist())
-        query_str = (
-            "{\n  Get {\n    "
-            f"{self.class_name}(nearVector: {{ vector: {vector_json} }}, limit: {topk}) "
-            "{\n      originalId\n      _additional { id distance }\n    }\n  }\n}"
+        builder = (
+            self._client.query.get(self.class_name, [self._ORIGINAL_ID_FIELD])
+            .with_near_vector({"vector": vector.tolist()})
+            .with_limit(topk)
+            .with_additional(["id", "distance"])
         )
-        payload = {"query": query_str}
-        response = self._session.post(self._graphql_endpoint, json=payload, timeout=self.timeout)
 
-        if response.status_code != HTTPStatus.OK:
-            self._raise_error("search request failed", response)
+        if filters:
+            # Weaviate's where clause enables server-side filtering.
+            builder = builder.with_where(filters)
 
-        data = response.json()
+        try:
+            data = builder.do()
+        except Exception as exc:  # pragma: no cover - defensive programming
+            self._handle_exception("search request failed", exc)
+
         results = self._extract_results(data)
-
-        search_results = []
-
-        for result in results[:topk]:
-            additional = result.get("_additional", {})
-            distance = float(additional.get("distance", "inf"))
-            id_str = additional.get("id")
-            original = result.get("originalId")
-            if original is not None:
-                data_id = int(original)
-
-            else:
-                try:
-                    data_id = self._validate_uuid(id_str) if id_str is not None else -1
-                except ValueError:
-                    data_id = -1
-
-            search_results.append(SearchResult(id=data_id, score=distance))
-
-        return search_results
+        return results[:topk]
 
     def delete(self, ids: Sequence[int]) -> None:
-        """Delete objects for the provided identifiers."""
-        for identifier in ids:
-            obj_id = self._make_object_id(int(identifier))
-            try:
-                self._client.data_object.delete(obj_id, class_name=self.class_name)
-            except Exception as exc:  # pragma: no cover - defensively capture client errors
-                status_code = getattr(exc, "status_code", None)
-                if status_code not in {HTTPStatus.NOT_FOUND}:
-                    self._handle_exception("failed to delete object", exc)
+        """Delete objects corresponding to the provided identifiers."""
+        object_ids = [self._make_object_id(int(identifier)) for identifier in ids]
+        for obj_id in object_ids:
+            self._delete_object(obj_id)
 
     def stats(self) -> dict[str, object]:
-        """Return basic statistics derived from Weaviate aggregate queries."""
+        """Return summary statistics sourced via a Weaviate aggregation query."""
         try:
             data = self._client.query.aggregate(self.class_name).with_meta_count().do()
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive programming
             self._handle_exception("failed to fetch stats", exc)
+
         count = self._extract_count(data)
         stats = {
             "ntotal": count,
@@ -218,39 +227,44 @@ class Weaviate(VectorDatabase):
             "base_url": self.base_url,
             "dim": self.dim,
         }
-        logger.debug(f"[WeaviateAdaptor] Stats for {self.class_name}: {stats}")
+        logger.debug("[WeaviateAdaptor] Stats for %s => %s", self.class_name, stats)
         return stats
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Internal helpers
     # ------------------------------------------------------------------
-    def check_ready(self) -> None:
-        """Check if instance is ready for operations."""
+    def _check_ready(self) -> None:
+        """Poll the readiness endpoint until Weaviate reports healthy."""
         deadline = time.time() + self.timeout
         last_error: Exception | None = None
+
         while time.time() < deadline:
             try:
                 if self._client.is_ready():
-                    logger.info(f"[WeaviateAdaptor] Weaviate instance ready at {self.base_url}")
+                    logger.info("[WeaviateAdaptor] Weaviate ready at %s", self.base_url)
                     return
             except Exception as exc:  # pragma: no cover - depends on client internals
                 last_error = exc
             time.sleep(0.5)
+
         if last_error is None:
-            error_msg = "weaviate instance readiness probe failed to connect"
-            raise WeaviateError(error_msg)
+            msg = "weaviate instance readiness probe failed to connect"
+            raise WeaviateError(msg)
         self._handle_exception("weaviate instance not ready", last_error)
 
     def _class_exists(self) -> bool:
+        """Return ``True`` if the target class already exists."""
         try:
             schema = self._client.schema.get()
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - defensive programming
             self._handle_exception("failed to probe class", exc)
+
         classes = schema.get("classes", [])
         return any(entry.get("class") == self.class_name for entry in classes)
 
     @staticmethod
     def _translate_metric(metric: Metric) -> str:
+        """Map internal metric names to Weaviate's expected identifiers."""
         if metric == Metric.INNER_PRODUCT:
             return "dot"
         if metric == Metric.COSINE:
@@ -262,17 +276,20 @@ class Weaviate(VectorDatabase):
         raise ValueError(msg)
 
     def _extract_results(self, payload: dict) -> list[SearchResult]:
+        """Convert the GraphQL response into a list of ``SearchResult`` objects."""
         if payload.get("errors"):
             return []
+
         data = payload.get("data", {})
         get_section = data.get("Get", {})
         hits = get_section.get(self.class_name, [])
+
         results: list[SearchResult] = []
         for hit in hits:
             additional = hit.get("_additional", {})
             distance = float(additional.get("distance", float("inf")))
-            original = hit.get("originalId")
-            candidate_id: int
+            original = hit.get(self._ORIGINAL_ID_FIELD)
+
             if original is not None:
                 candidate_id = int(original)
             else:
@@ -281,35 +298,42 @@ class Weaviate(VectorDatabase):
                     candidate_id = self._validate_uuid(id_str) if id_str is not None else -1
                 except ValueError:
                     candidate_id = -1
-            results.append(
-                SearchResult(
-                    id=candidate_id,
-                    score=float(distance),
-                )
-            )
+
+            results.append(SearchResult(id=candidate_id, score=distance))
+
         return results
 
     def _extract_count(self, payload: dict) -> int:
+        """Extract the ``meta.count`` field from an aggregate response."""
         if payload.get("errors"):
             return 0
+
         data = payload.get("data", {})
         aggregate = data.get("Aggregate", {})
         entries = aggregate.get(self.class_name, [])
         if not entries:
             return 0
+
         meta = entries[0].get("meta", {})
         return int(meta.get("count", 0))
 
     @staticmethod
     def _make_object_id(identifier: int) -> str:
-        """Map integer identifiers to deterministic UUIDs accepted by Weaviate."""
-
+        """Derive a deterministic UUID from the integer identifier."""
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"inatinqperf:{identifier}"))
+
+    def _delete_object(self, obj_id: str) -> None:
+        """Delete a single object, tolerating 404 responses."""
+        try:
+            self._client.data_object.delete(obj_id, class_name=self.class_name)
+        except Exception as exc:  # pragma: no cover - defensive programming
+            status_code = getattr(exc, "status_code", None)
+            if status_code not in {HTTPStatus.NOT_FOUND}:
+                self._handle_exception("failed to delete object", exc)
 
     @staticmethod
     def _validate_uuid(object_id: str) -> int:
-        """Fallback when the search response omits the originalId property."""
-
+        """Ensure Weaviate returned a valid UUID; return -1 when validation fails."""
         try:
             uuid.UUID(object_id)
         except (ValueError, AttributeError) as exc:
@@ -319,5 +343,6 @@ class Weaviate(VectorDatabase):
 
     @staticmethod
     def _handle_exception(context: str, exc: Exception) -> None:
+        """Wrap raw client exceptions in a ``WeaviateError`` for consumers."""
         msg = f"{context}: {exc}"
         raise WeaviateError(msg) from exc

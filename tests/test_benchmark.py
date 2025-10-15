@@ -2,14 +2,15 @@
 
 import numpy as np
 import pytest
+import requests
 from collections.abc import Sequence
 from datasets import Dataset
 
 from inatinqperf import adaptors
-from inatinqperf.adaptors.base import SearchResult, VectorDatabase, DataPoint
+from inatinqperf.adaptors.base import DataPoint, SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
-from inatinqperf.benchmark.configuration import VectorDatabaseParams
 from inatinqperf.benchmark import Benchmarker, benchmark
+from inatinqperf.benchmark.configuration import VectorDatabaseParams
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
@@ -222,6 +223,80 @@ def test_update_with_dummy_vectordb(monkeypatch, data_path, config_yaml, mocked_
 
     assert vectordb.delete_called
     assert vectordb.num_deleted_points == benchmarker.cfg.update["delete_count"]
+
+
+def test_build_weaviate_passes_dataset(monkeypatch, config_yaml):
+    """build should hand the dataset and parameters to the Weaviate adaptor."""
+
+    captured: dict[str, object] = {}
+
+    class CaptureWeaviate:
+        def __init__(self, dataset, **params):
+            captured["dataset"] = dataset
+            captured["params"] = params
+
+        def stats(self):
+            return {"ntotal": 0}
+
+    monkeypatch.setitem(adaptors.VECTORDBS, "weaviate.hnsw", CaptureWeaviate)
+
+    benchmarker = Benchmarker(config_yaml)
+    benchmarker.cfg.vectordb.type = "weaviate.hnsw"
+    benchmarker.cfg.vectordb.params = VectorDatabaseParams(
+        metric=Metric.COSINE,
+        base_url="http://example.com",
+        class_name="TestClass",
+        index_type="flat",
+    )
+    monkeypatch.setattr(
+        Benchmarker,
+        "_validate_weaviate_params",
+        staticmethod(lambda params: None),
+    )
+
+    dataset = Dataset.from_dict(_fake_ds_embeddings(n=3, d=2))
+
+    _ = benchmarker.build(dataset)
+
+    assert captured["dataset"] is dataset
+    assert captured["params"]["metric"] == Metric.COSINE
+    assert captured["params"]["base_url"] == "http://example.com"
+    assert captured["params"]["class_name"] == "TestClass"
+
+
+def test_validate_weaviate_params_missing_required():
+    """_validate_weaviate_params should raise when required keys are absent."""
+    params = {"base_url": "http://example.com"}
+    with pytest.raises(ValueError):
+        Benchmarker._validate_weaviate_params(params)
+
+
+def test_validate_weaviate_params_unreachable(monkeypatch):
+    """_validate_weaviate_params should raise when Weaviate is unreachable."""
+
+    params = {"base_url": "http://example.com/", "class_name": "TestClass"}
+
+    def raise_request(*args, **kwargs):  # noqa: D401
+        raise requests.RequestException("boom")
+
+    monkeypatch.setattr(benchmark.requests, "get", raise_request)
+
+    with pytest.raises(RuntimeError):
+        Benchmarker._validate_weaviate_params(params)
+
+
+def test_validate_weaviate_params_bad_status(monkeypatch):
+    """_validate_weaviate_params should raise when readiness endpoint returns !200."""
+
+    params = {"base_url": "http://example.com/", "class_name": "TestClass"}
+
+    class FakeResponse:
+        status_code = 503
+
+    monkeypatch.setattr(benchmark.requests, "get", lambda *_, **__: FakeResponse())
+
+    with pytest.raises(RuntimeError):
+        Benchmarker._validate_weaviate_params(params)
 
 
 # ---------- Edge cases for helpers ----------

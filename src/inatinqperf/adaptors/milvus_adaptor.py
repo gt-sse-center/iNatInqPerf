@@ -45,7 +45,7 @@ class Milvus(VectorDatabase):
     SERVER_PORT = "19530"  # default milvus server port
 
     @logger.catch
-    def __init__(self, dataset: HuggingFaceDataset, metric: str, index_name: MilvusIndexType) -> None:
+    def __init__(self, dataset: HuggingFaceDataset, metric: Metric, index_type: MilvusIndexType) -> None:
         super().__init__(dataset, metric)
         try:
             connections.connect(host="localhost", port="19530")
@@ -55,6 +55,7 @@ class Milvus(VectorDatabase):
             logger.exception("Milvus server is not running or connection failed")
 
         self.client = MilvusClient(uri=f"http://{self.SERVER_HOST}:{self.SERVER_PORT}")
+        self.metric = self._translate_metric(metric)
 
         # Remove collection if it already exists
         if self.client.has_collection(self.COLLECTION_NAME):
@@ -65,30 +66,15 @@ class Milvus(VectorDatabase):
             auto_id=False,
             enable_dynamic_schema=True,
         )
-
         self.schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True)
         self.schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.dim)
-
-        # self.writer = LocalBulkWriter(
-        #     collection_name=self.COLLECTION_NAME,
-        #     schema=self.schema,
-        #     chunk_size=512 * 1024 * 1024,  # 512MB
-        #     local_path=output_dir,
-        #     file_type=BulkFileType.PARQUET,
-        # )
-
-        
-            # if batch_data:
-            #     self.writer.append_rows(batch_data)
-
-        # self.writer.commit()
 
         self.index_params = self.client.prepare_index_params()
         self.index_params.add_index(
             field_name="vector",
-            index_type="IVF_FLAT",
+            index_type=index_type,
             index_name=self.INDEX_NAME,
-            metric_type="L2",
+            metric_type=self.metric,
         )
 
         self.client.create_collection(
@@ -111,6 +97,17 @@ class Milvus(VectorDatabase):
         
         self.client.load_collection(collection_name=self.COLLECTION_NAME)
 
+    def _translate_metric(self, metric: Metric) -> str:
+        """Translate metric to Milvus metric type."""
+        if metric == Metric.INNER_PRODUCT:
+            return "IP"
+        elif metric == Metric.COSINE:
+            return "COSINE"
+        elif metric == Metric.L2:
+            return "L2"
+        else:
+            raise ValueError(f"Unsupported metric: {metric}")
+    
     def upsert(self, x: Sequence[DataPoint]) -> None:
         """Upsert vectors with given IDs."""
 

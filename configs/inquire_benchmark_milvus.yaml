@@ -12,8 +12,8 @@ embedding:
 vectordb:
   type: milvus
   params:
-    metric: L2
-    index_name: IVF_FLAT
+    metric: l2
+    index_type: IVF_FLAT
 
 search:
   topk: 10

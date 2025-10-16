@@ -2,14 +2,15 @@
 
 import numpy as np
 import pytest
+import requests
 from collections.abc import Sequence
 from datasets import Dataset
 
 from inatinqperf import adaptors
-from inatinqperf.adaptors.base import SearchResult, VectorDatabase, DataPoint
+from inatinqperf.adaptors.base import DataPoint, SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
-from inatinqperf.benchmark.configuration import VectorDatabaseParams
 from inatinqperf.benchmark import Benchmarker, benchmark
+from inatinqperf.benchmark.configuration import VectorDatabaseParams
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 

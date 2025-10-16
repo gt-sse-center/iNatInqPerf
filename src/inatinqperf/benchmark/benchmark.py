@@ -1,19 +1,17 @@
 """Vector database-agnostic benchmark orchestrator."""
 
 import time
-from http import HTTPStatus
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import numpy as np
-import requests
 import tqdm
 import yaml
 from datasets import Dataset
 from loguru import logger
 
 from inatinqperf.adaptors import VECTORDBS
-from inatinqperf.adaptors.base import DataPoint, Query, VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils import Profiler, get_table
@@ -121,48 +119,12 @@ class Benchmarker:
 
         init_params = self.cfg.vectordb.params.to_dict()
 
-        if vdb_type.startswith("weaviate"):
-            self._validate_weaviate_params(init_params)
-
         with Profiler(f"build-{vdb_type}"):
             vdb = VECTORDBS[vdb_type](dataset, **init_params)
 
         logger.info(f"Stats: {vdb.stats()}")
 
         return vdb
-
-    @staticmethod
-    def _validate_weaviate_params(params: dict[str, Any]) -> None:
-        """Ensure required Weaviate settings exist and the service is reachable."""
-
-        required_keys = ["base_url", "class_name"]
-        missing = [key for key in required_keys if not params.get(key)]
-        if missing:
-            missing_str = ", ".join(missing)
-            raise ValueError(
-                "Weaviate configuration missing required parameter(s): "
-                + missing_str
-                + "Please update your benchmark config."
-            )
-
-        base_url = str(params.pop("base_url")).rstrip("/")
-        params["base_url"] = base_url
-        params.pop("container_hint", None)
-        readiness_endpoint = f"{base_url}/v1/.well-known/ready"
-
-        try:
-            response = requests.get(readiness_endpoint, timeout=5)
-        except requests.RequestException as exc:
-            error_desc = f"Make sure a weaviate container is running and serving at {base_url}."
-            raise RuntimeError("Unable to reach Weaviate" + error_desc) from exc
-
-        if response.status_code != HTTPStatus.OK:
-            error_desc = f" Weaviate readiness enpoint returned status code {response.status_code}."
-            raise RuntimeError(
-                "Weaviate readiness endpoint "
-                + error_desc
-                + "Start or fix the Weaviate container before running the benchmark."
-            )
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
@@ -195,10 +157,11 @@ class Benchmarker:
 
         logger.info("Performing search on baseline")
         with Profiler("search-baseline-FaissFlat") as p:
-            i0 = np.empty((q.shape[0], topk), dtype=float)
+            i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
             for i in tqdm.tqdm(range(q.shape[0])):
                 base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
-                i0[i] = np.asarray([r.id for r in base_results])
+                padded = _ids_to_fixed_array(base_results, topk)
+                i0[i] = padded
 
         # search + profile
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
@@ -211,12 +174,13 @@ class Benchmarker:
 
             p.sample()
 
-        # recall@K (compare last retrieved to baseline per query)
+        logger.info("recall@K (compare last retrieved to baseline per query")
         # For simplicity compute approximate on whole Q at once:
-        i1 = np.empty((q.shape[0], topk), dtype=float)
+        i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
         for i in tqdm.tqdm(range(q.shape[0])):
             results = vectordb.search(Query(q[i]), topk, **params.to_dict())
-            i1[i] = np.asarray([r.id for r in results])
+            padded = _ids_to_fixed_array(results, topk)
+            i1[i] = padded
         rec = recall_at_k(i1, i0, topk)
 
         x = np.asarray(dataset["embedding"], dtype=np.float32)
@@ -294,3 +258,15 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     for i in range(approx_i.shape[0]):
         hits += len(set(approx_i[i, :k]).intersection(set(exact_i[i, :k])))
     return hits / float(approx_i.shape[0] * k)
+
+
+def _ids_to_fixed_array(results: Sequence[SearchResult], topk: int) -> np.ndarray:
+    """Convert a list of SearchResult objects into a fixed-length array."""
+
+    arr = np.full(topk, -1.0, dtype=float)
+    if not results:
+        return arr
+
+    count = min(topk, len(results))
+    arr[:count] = [float(results[i].id) for i in range(count)]
+    return arr

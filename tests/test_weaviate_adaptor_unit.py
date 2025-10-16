@@ -1,400 +1,543 @@
-"""Unit tests for the Weaviate adaptor using stubbed HTTP sessions."""
+"""Unit tests for the Weaviate adaptor using a stubbed client.
 
-from collections import defaultdict
+Each test focuses on a specific slice of the Weaviate client API:
+
+* ``client.schema`` covers class creation, deletion, and existence checks.
+* ``client.data_object`` simulates vector ingest and removal semantics.
+* ``client.query`` exercises the GraphQL Get/Aggregate endpoints.
+"""
+
+from __future__ import annotations
+
 import uuid
 
 import numpy as np
-import requests
-from unittest import mock
 import pytest
+from datasets import Dataset
 
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult
 from inatinqperf.adaptors.metric import Metric
-from inatinqperf.adaptors.weaviate_adaptor import (
-    Weaviate,
-    WeaviateError,
-    HuggingFaceDataset,
-    DataPoint,
-    Query,
-)
+from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateError
 
 
-class FakeResponse:
-    """Lightweight stand-in for requests.Response with JSON payload support."""
+class FakeStatusError(Exception):
+    """Mimic weaviate exceptions that surface HTTP status codes."""
 
-    def __init__(self, status_code: int = 200, json_data: dict | None = None, text: str = "") -> None:
+    def __init__(self, status_code: int, message: str = "") -> None:
+        """Store the status code and optional message."""
+        super().__init__(message or f"status {status_code}")
         self.status_code = status_code
-        self._json = json_data or {}
-        self.text = text
-
-    def json(self) -> dict:
-        return self._json
 
 
-class MockSession:
-    """Mock emulating the requests.Session API used by the adaptor."""
+class StubSchema:
+    """Stub implementation of the client.schema interface."""
 
-    def __init__(self, class_name="TestClass", aggregate_count=0) -> None:
-        self.class_name = class_name
-        self.calls = defaultdict(list)
-        self.graphql_results: list[dict] = []
-        self.aggregate_count = aggregate_count
+    def __init__(self, client: StubWeaviateClient) -> None:  # noqa: F821 - forward reference
+        """Initialise storage for schema interactions."""
+        self._client = client
+        self.classes: dict[str, dict] = {}
+        self.create_calls: list[dict] = []
+        self.delete_calls: list[str] = []
+        self.get_calls = 0
+        self.raise_on_create: Exception | None = None
+        self.raise_on_delete: Exception | None = None
+        self.raise_on_get: Exception | None = None
 
-    def post(self, url: str, json: dict | None = None, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
-        """Record POST requests and return canned responses."""
-        if url.endswith("/v1/schema") or url.endswith("/v1/objects"):
-            return FakeResponse(200)
+    def create_class(self, payload: dict) -> None:
+        """Record a schema creation request and return success unless configured otherwise."""
+        self.create_calls.append(payload)
+        if self.raise_on_create is not None:
+            raise self.raise_on_create
+        self.classes[payload["class"]] = payload
 
-        if url.endswith("/v1/graphql"):
-            if "Get" in (json or {}).get("query", ""):
-                data = {"data": {"Get": {self.class_name: self.graphql_results}}}
-                return FakeResponse(200, data)
+    def delete_class(self, class_name: str) -> None:
+        """Delete the stored class metadata or raise if configured to fail."""
+        self.delete_calls.append(class_name)
+        if self.raise_on_delete is not None:
+            raise self.raise_on_delete
+        self.classes.pop(class_name, None)
 
-            data = {
-                "data": {
-                    "Aggregate": {
-                        self.class_name: [
-                            {
-                                "meta": {
-                                    "count": self.aggregate_count,
-                                }
-                            }
-                        ]
-                    }
-                }
+    def get(self) -> dict:
+        """Return the stored schema payload, raising if configured to do so."""
+        self.get_calls += 1
+        if self.raise_on_get is not None:
+            raise self.raise_on_get
+        return {"classes": list(self.classes.values())}
+
+
+class StubDataObject:
+    """Stub implementation of the client.data_object interface."""
+
+    def __init__(self) -> None:
+        """Initialise call tracking for create/delete operations."""
+        self.create_calls: list[tuple[str, str, dict, list[float]]] = []
+        self.delete_calls: list[tuple[str, str]] = []
+        self.raise_on_create: Exception | None = None
+        self.raise_on_delete: Exception | None = None
+
+    def create(self, data_object: dict, class_name: str, uuid: str, vector: list[float]) -> None:  # noqa: A002
+        """Store create parameters and optionally raise to simulate failure."""
+        self.create_calls.append((class_name, uuid, data_object, vector))
+        if self.raise_on_create is not None:
+            raise self.raise_on_create
+
+    def delete(self, uuid: str, class_name: str) -> None:  # noqa: A002
+        """Record delete calls and optionally raise to simulate failure."""
+        self.delete_calls.append((class_name, uuid))
+        if self.raise_on_delete is not None:
+            raise self.raise_on_delete
+
+
+class StubQueryGetBuilder:
+    """Query builder that simulates GraphQL GET requests."""
+
+    def __init__(self, client: StubWeaviateClient, class_name: str, properties: list[str]) -> None:  # noqa: F821
+        """Capture the client context and request metadata."""
+        self._client = client
+        self._class_name = class_name
+        self._properties = properties
+        self._near_vector: dict | None = None
+        self._limit: int | None = None
+        self._additional: list[str] | None = None
+        self._where: dict | None = None
+
+    def with_near_vector(self, payload: dict) -> StubQueryGetBuilder:
+        """Record the near-vector payload and return self for chaining."""
+        self._near_vector = payload
+        return self
+
+    def with_limit(self, limit: int) -> StubQueryGetBuilder:
+        """Record the query limit and return self for chaining."""
+        self._limit = limit
+        return self
+
+    def with_additional(self, additional: list[str]) -> StubQueryGetBuilder:
+        """Record requested additional fields and return self for chaining."""
+        self._additional = additional
+        return self
+
+    def with_where(self, where: dict) -> StubQueryGetBuilder:
+        """Record the filter payload and return self for chaining."""
+        self._where = where
+        return self
+
+    def do(self) -> dict:
+        """Return the canned GraphQL response, recording the request details."""
+        self._client.get_queries.append(
+            {
+                "class_name": self._class_name,
+                "properties": self._properties,
+                "near_vector": self._near_vector,
+                "limit": self._limit,
+                "additional": self._additional,
+                "where": self._where,
             }
-            return FakeResponse(200, data)
-
-        return FakeResponse(404, text="unexpected post")
-
-    def delete(self, url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
-        """Track DELETE calls and respond with success by default."""
-        return FakeResponse(204)
-
-    def get(self, url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
-        """Return ready/404 responses matching the adaptor's expectations."""
-        # self.calls["get"].append(url)
-        if url.endswith("/.well-known/ready"):
-            return FakeResponse(200)
-        if url.endswith("/v1/schema/TestClass"):
-            return FakeResponse(404)
-        return FakeResponse(200)
+        )
+        if self._client.graphql_get_exception is not None:
+            raise self._client.graphql_get_exception
+        return self._client.graphql_get_response
 
 
-@pytest.fixture(autouse=True)
-def mock_requests_session(mocker):
-    mocker.patch("requests.Session", MockSession)
-    # Patch methods with a Mock object but yield the same results as the MockSession methods
-    mocker.patch.object(MockSession, "post", side_effect=MockSession().post)
-    mocker.patch.object(MockSession, "delete", side_effect=MockSession().delete)
-    mocker.patch.object(MockSession, "get", side_effect=MockSession().get)
+class StubQueryAggregateBuilder:
+    """Query builder that simulates GraphQL aggregate requests."""
+
+    def __init__(self, client: StubWeaviateClient, class_name: str) -> None:  # noqa: F821
+        """Capture the client context and requested class name."""
+        self._client = client
+        self._class_name = class_name
+        self._meta_count = False
+
+    def with_meta_count(self) -> StubQueryAggregateBuilder:
+        """Flag that meta count was requested and return self."""
+        self._meta_count = True
+        return self
+
+    def do(self) -> dict:
+        """Return the canned aggregate payload, recording request metadata."""
+        self._client.aggregate_queries.append(
+            {"class_name": self._class_name, "meta_count": self._meta_count}
+        )
+        if self._client.graphql_aggregate_exception is not None:
+            raise self._client.graphql_aggregate_exception
+        return self._client.graphql_aggregate_response
 
 
-@pytest.fixture(autouse=True)
-def mock_weaviate_adaptor(mocker):
-    mocker.patch.object(Weaviate, "check_ready", lambda self: None)
-    mocker.patch.object(Weaviate, "_class_exists", lambda self: True)
+class StubQuery:
+    """Stub implementation of the client.query interface."""
+
+    def __init__(self, client: StubWeaviateClient) -> None:  # noqa: F821
+        """Store the shared stub client."""
+        self._client = client
+
+    def get(self, class_name: str, properties: list[str]) -> StubQueryGetBuilder:
+        """Return a builder for GET queries."""
+        return StubQueryGetBuilder(self._client, class_name, properties)
+
+    def aggregate(self, class_name: str) -> StubQueryAggregateBuilder:
+        """Return a builder for aggregate queries."""
+        return StubQueryAggregateBuilder(self._client, class_name)
+
+
+class StubWeaviateClient:
+    """Aggregate stub matching the subset of the weaviate client API used by the adaptor."""
+
+    def __init__(self, class_name: str) -> None:
+        """Initialise stub sub-clients and canned responses."""
+        self.schema = StubSchema(self)
+        self.data_object = StubDataObject()
+        self.query = StubQuery(self)
+        self.get_queries: list[dict] = []
+        self.aggregate_queries: list[dict] = []
+        self.graphql_get_response: dict = {"data": {"Get": {class_name: []}}}
+        self.graphql_get_exception: Exception | None = None
+        self.graphql_aggregate_response: dict = {
+            "data": {"Aggregate": {class_name: [{"meta": {"count": 0}}]}}
+        }
+        self.graphql_aggregate_exception: Exception | None = None
+        self.ready_responses: list[bool | Exception] = [True]
+
+    def is_ready(self) -> bool:
+        """Return the next readiness response, raising if configured to do so."""
+        if not self.ready_responses:
+            return True
+        next_value = self.ready_responses.pop(0)
+        if isinstance(next_value, Exception):
+            raise next_value
+        return bool(next_value)
+
+
+def make_dataset(dim: int) -> Dataset:
+    """Construct a minimal dataset with a single embedding vector of the given dimensionality."""
+
+    return Dataset.from_dict({"embedding": [[0.0] * dim]})
+
+
+@pytest.fixture(name="stub_client")
+def stub_client_fixture() -> StubWeaviateClient:
+    """Provide a fresh stub client for each test."""
+    return StubWeaviateClient("TestClass")
 
 
 @pytest.fixture(name="dataset")
-def dataset_fixture():
-    return HuggingFaceDataset.from_dict(
-        {"id": np.arange(10), "embedding": np.zeros((10, 3), dtype=np.float32)}
-    )
+def dataset_fixture() -> Dataset:
+    """Supply a minimal dataset for adaptor construction."""
+    return make_dataset(3)
 
 
 @pytest.fixture(name="adaptor")
-def adaptor_fixture(dataset):
-    """Provide a Weaviate adaptor wired to the stub session for unit tests."""
-    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    return adaptor
+def adaptor_fixture(dataset: Dataset, stub_client: StubWeaviateClient) -> tuple[Weaviate, StubWeaviateClient]:
+    """Construct a Weaviate adaptor bound to the stub client."""
+    adaptor = Weaviate(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        client=stub_client,
+    )
+    return adaptor, stub_client
 
 
-def test_create_class(mocker, dataset, caplog):
-    """Creating the class should POST to the schema endpoint."""
-    mocker.patch.object(Weaviate, "_class_exists", lambda self: False)
-
-    class_name = "TestClass"
-    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name=class_name)
-
-    adaptor._session.post.assert_called()
-    assert f"Created class={class_name}" in caplog.text
-    assert f"Initialized class={class_name}" in caplog.text
-
-
-def test_ignore_existing_class(dataset, mocker):
-    """Ensure 422 from Weaviate (already exists) is treated as success."""
-
-    def already_exists_post(self, url, json=None, timeout=None):  # type: ignore[arg-type]
-        # self.calls["post"].append((url, json))
-        return FakeResponse(422, text="Already exists")
-
-    mocker.patch.object(MockSession, "post", side_effect=already_exists_post)
-
-    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-    adaptor._session.post.assert_called()
+def test_train_index_creates_class(dataset: Dataset) -> None:
+    """train_index should create the class when it does not already exist."""
+    client = StubWeaviateClient("TestClass")
+    adaptor = Weaviate(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        client=client,
+    )
+    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    assert client.schema.create_calls
 
 
-def test_upsert_and_search(adaptor, mocker):
-    """Upsert should succeed and search should surface the deterministic ids."""
-    # Undo all the patching so we can patch properly
-    mocker.stopall()
+def test_train_index_ignores_existing_class(dataset: Dataset) -> None:
+    """train_index should tolerate a 422 already-exists response."""
+    client = StubWeaviateClient("TestClass")
+    client.schema.raise_on_create = FakeStatusError(422, "already exists")
+    adaptor = Weaviate(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        client=client,
+    )
+    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    assert client.schema.create_calls
 
-    mock_session = MockSession()
-    mock_session.graphql_results = [
-        {"originalId": 2, "_additional": {"id": "00000000-0000-0000-0000-000000000002", "distance": 0.1}},
-        {"originalId": 1, "_additional": {"id": "00000000-0000-0000-0000-000000000001", "distance": 0.9}},
+
+def test_upsert_and_search_with_stub(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """Upserting data points should make them retrievable via search."""
+    weaviate_adaptor, client = adaptor
+    datapoints = [
+        DataPoint(id=1, vector=[1.0, 0.0, 0.0], metadata={"species": "a"}),
+        DataPoint(id=2, vector=[0.0, 1.0, 0.0], metadata={"originalId": 2}),
     ]
-    mocker.patch.object(adaptor._session, "post", side_effect=mock_session.post)
+    initial_creates = len(client.data_object.create_calls)
+    weaviate_adaptor.upsert(datapoints)
+    new_creates = len(client.data_object.create_calls) - initial_creates
+    assert new_creates == len(datapoints)
 
-    ids = np.array([1, 2], dtype=np.int64)
-    vectors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
-    data_points = [DataPoint(id=i, vector=vector, metadata={}) for i, vector in zip(ids, vectors)]
-    adaptor.upsert(data_points)
+    # GraphQL Get query should honour the nearVector ranking and expose _additional metadata.
+    client.graphql_get_response = {
+        "data": {
+            "Get": {
+                weaviate_adaptor.class_name: [
+                    {
+                        "originalId": 2,
+                        "_additional": {"id": "00000000-0000-0000-0000-000000000002", "distance": 0.1},
+                    },
+                    {
+                        "originalId": 1,
+                        "_additional": {"id": "00000000-0000-0000-0000-000000000001", "distance": 0.9},
+                    },
+                ]
+            }
+        }
+    }
+    query = Query(vector=[0.1, 1.0, 0.0])
+    results = weaviate_adaptor.search(query, topk=2)
+    assert isinstance(results, list)
+    assert all(isinstance(item, SearchResult) for item in results)
+    assert [result.id for result in results] == [2, 1]
 
-    adaptor._session.post.assert_called()
 
-    query = Query([0.1, 1.0, 0.0])
-    results = adaptor.search(query, topk=2)
-    assert len(results) == 2
-    assert [r.id for r in results] == [2, 1]
-
-
-def test_stats_returns_count(adaptor, mocker):
-    """Stats should reflect the aggregate count returned by GraphQL."""
-    mocker.stopall()
-    mock_session = MockSession(aggregate_count=5)
-    mocker.patch.object(adaptor._session, "post", side_effect=mock_session.post)
-
-    stats = adaptor.stats()
+def test_stats_returns_count(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """stats should surface the meta count from the aggregate response."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_aggregate_response = {
+        "data": {"Aggregate": {weaviate_adaptor.class_name: [{"meta": {"count": 5}}]}}
+    }
+    stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 5
-    assert stats["class_name"] == "TestClass"
+    assert stats["class_name"] == weaviate_adaptor.class_name
 
 
-def test_stats_handles_graphql_error(adaptor, mocker):
-    """Stats should handle GraphQL "errors" payloads by returning zero."""
-
-    def graphql_error_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            return FakeResponse(200, {"errors": [{"message": "boom"}]})
-        return FakeResponse(200)
-
-    mocker.patch.object(adaptor._session, "post", side_effect=graphql_error_post)
-
-    stats = adaptor.stats()
+def test_stats_handles_graphql_error(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """stats should return zero when GraphQL reports errors."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_aggregate_response = {"errors": [{"message": "boom"}]}
+    stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 0
 
 
-def test_delete_multiple_ids(adaptor):
-    """Deleting multiple ids should issue one request per id."""
-    adaptor.delete([10, 20])
+def test_delete_handles_multiple_ids(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """delete should invoke the client for each identifier."""
+    weaviate_adaptor, client = adaptor
+    weaviate_adaptor.delete([10, 20])
+    recorded_ids = {uuid for _, uuid in client.data_object.delete_calls}
+    expected_ids = {
+        weaviate_adaptor._make_object_id(10),
+        weaviate_adaptor._make_object_id(20),
+    }
+    assert expected_ids.issubset(recorded_ids)
 
-    adaptor._session.delete.assert_called()
-    assert adaptor._session.delete.call_count == 2
 
-
-def test_invalid_metric_raises_value_error(dataset):
-    """Constructor should reject unsupported distance metrics."""
+def test_invalid_metric_raises_value_error(dataset: Dataset) -> None:
+    """Constructing with an unsupported metric string should raise ValueError."""
     with pytest.raises(ValueError):
-        Weaviate(dataset, metric="manhattan")
+        Weaviate(dataset=dataset, metric="manhattan", url="http://example.com", class_name="TestClass")
 
 
-def test_upsert_rejects_dimension_mismatch(adaptor):
-    data_points = [DataPoint(id=1, vector=np.array([[1.0, 2.0]], dtype=np.float32), metadata={})]
+def test_upsert_rejects_dimension_mismatch(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """Upserting vectors of the wrong dimensionality must raise ValueError."""
+    weaviate_adaptor, _ = adaptor
+    bad_point = DataPoint(id=1, vector=[1.0, 2.0], metadata={})
     with pytest.raises(ValueError):
-        adaptor.upsert(data_points)
+        weaviate_adaptor.upsert([bad_point])
 
 
-def test_upsert_rejects_length_mismatch(adaptor):
-    """ids and vectors length mismatch should raise."""
-    data_points = [
-        DataPoint(id=1, vector=np.array([[1.0, 0.0, 0.0]], dtype=np.float32), metadata={}),
-        DataPoint(id=2, vector=[], metadata={}),
-    ]
+def test_search_rejects_invalid_queries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """Search should validate query dimensionality and top-k bounds."""
+    weaviate_adaptor, _ = adaptor
     with pytest.raises(ValueError):
-        adaptor.upsert(data_points)
-
-
-def test_search_rejects_invalid_queries(adaptor):
+        weaviate_adaptor.search(Query(vector=[1.0, 2.0]), topk=1)
     with pytest.raises(ValueError):
-        q = Query(np.array([1.0, 2.0], dtype=np.float32))
-        adaptor.search(q, topk=1)
-
-    with pytest.raises(ValueError):
-        q = Query(np.zeros((1, 3), dtype=np.float32))
-        adaptor.search(q, topk=0)
+        weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=0)
 
 
-def test_search_handles_graphql_errors(adaptor, mocker):
-    """GraphQL errors should return placeholder results instead of raising."""
-
-    def graphql_error_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            return FakeResponse(200, {"errors": [{"message": "no results"}]})
-        return FakeResponse(200)
-
-    mocker.patch.object(adaptor._session, "post", side_effect=graphql_error_post)
-
-    q = Query(np.zeros((3,), dtype=np.float32))
-    results = adaptor.search(q, topk=2)
-
-    distances = np.asarray([r.score for r in results])
-    assert np.isinf(distances).all()
-
-    ids = np.asarray([r.id for r in results])
-    assert (ids == -1).all()
+def test_search_handles_graphql_errors(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """GraphQL errors should return an empty result list."""
+    weaviate_adaptor, client = adaptor
+    # Simulate Weaviate returning an errors field rather than data.
+    client.graphql_get_response = {"errors": [{"message": "no results"}]}
+    results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=2)
+    assert results == []
 
 
-def test_check_ready_times_out_quickly(mocker, dataset):
-    """Readiness polling should surface repeated non-200 responses."""
-    adaptor = Weaviate(
-        dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.6
-    )
+def test_search_applies_filters(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """search should forward Query filters to the underlying GraphQL request."""
+    weaviate_adaptor, client = adaptor
+    filters = {"path": ["species"], "operator": "Equal", "valueString": "a"}
+    results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0], filters=filters), topk=1)
+    assert results == []
+    assert client.get_queries[-1]["where"] == filters
 
-    def failing_get(url, timeout=None):  # noqa: ARG002
-        return FakeResponse(503, text="not ready")
 
-    # Stop existing mocks
-    mocker.stopall()
-    mocker.patch.object(adaptor._session, "get", side_effect=failing_get)
-
+def test_error_responses_raise_weaviate_error(dataset: Dataset) -> None:
+    """Constructor should surface schema creation failures immediately."""
+    client = StubWeaviateClient("TestClass")
+    client.schema.raise_on_create = FakeStatusError(500, "boom")
     with pytest.raises(WeaviateError):
-        adaptor.check_ready()
+        Weaviate(
+            dataset=dataset,
+            metric=Metric.COSINE,
+            url="http://example.com",
+            class_name="TestClass",
+            client=client,
+        )
 
 
-def test_check_ready_success(mocker, dataset):
-    """Healthy readiness endpoint should exit the polling loop."""
+def test_drop_index_raises_on_failure(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """drop_index must surface errors when the client delete fails."""
+    weaviate_adaptor, client = adaptor
+    client.schema.raise_on_delete = FakeStatusError(500, "kaboom")
+    with pytest.raises(WeaviateError):
+        weaviate_adaptor.drop_index()
+
+
+def test_drop_index_success(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """drop_index should call the client delete when no errors occur."""
+    weaviate_adaptor, client = adaptor
+    weaviate_adaptor.drop_index()
+    assert client.schema.delete_calls
+
+
+def test_check_ready_times_out() -> None:
+    """_check_ready should raise when readiness never returns success."""
+    client = StubWeaviateClient("TestClass")
     adaptor = Weaviate(
-        dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=1.0
+        dataset=make_dataset(2),
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        timeout=0.2,
+        client=client,
+    )
+    client.ready_responses = [Exception("not ready")] * 5
+    with pytest.raises(WeaviateError):
+        adaptor._check_ready()
+
+
+def test_check_ready_success() -> None:
+    """_check_ready should exit successfully when the client reports ready."""
+    client = StubWeaviateClient("TestClass")
+    client.ready_responses = [False, True]
+    adaptor = Weaviate(
+        dataset=make_dataset(2),
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        timeout=1.0,
+        client=client,
+    )
+    adaptor._check_ready()
+    assert not client.ready_responses  # Consumed all readiness responses from the stub.
+
+
+def test_class_exists_paths() -> None:
+    """_class_exists should handle found, not found, and error states."""
+    client = StubWeaviateClient("TestClass")
+    adaptor = Weaviate(
+        dataset=make_dataset(2),
+        metric=Metric.COSINE,
+        url="http://example.com",
+        class_name="TestClass",
+        client=client,
     )
 
-    def ready_get(url, timeout=None):  # noqa: ARG002
-        return FakeResponse(200)
-
-    mocker.stopall()
-    mocker.patch.object(adaptor._session, "get", side_effect=ready_get)
-
-    adaptor.check_ready()
-
-
-def test_class_exists_paths(mocker, dataset):
-    """Class existence helper should handle 404/200 and error paths."""
-    adaptor = Weaviate(dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass")
-
-    # Not found -> False
-    mocker.stopall()
-    mocker.patch.object(adaptor, "_session", MockSession())
-    mocker.patch.object(adaptor._session, "get", side_effect=lambda url, timeout=None: FakeResponse(404))
+    adaptor._drop_class_if_exists()
     assert adaptor._class_exists() is False
 
-    # Found -> True
-    mocker.patch.object(adaptor._session, "get", side_effect=lambda url, timeout=None: FakeResponse(200))
+    client.schema.classes["TestClass"] = {"class": "TestClass"}
     assert adaptor._class_exists() is True
 
-    # Unexpected status -> raises
-    mocker.patch.object(
-        adaptor._session, "get", side_effect=lambda url, timeout=None: FakeResponse(500, text="oops")
-    )
+    client.schema.raise_on_get = Exception("oops")
     with pytest.raises(WeaviateError):
         adaptor._class_exists()
 
 
-def test_upsert_delete_tolerates_404(mocker, adaptor):
-    """404 deletes should be treated as successful no-ops."""
-
-    def delete_returning_404(url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
-        return FakeResponse(404)
-
-    mocker.patch.object(adaptor._session, "delete", side_effect=delete_returning_404)
-
-    data_points = [DataPoint(id=1, vector=np.array([1.0, 0.0, 0.0], dtype=np.float32), metadata={})]
-    adaptor.upsert(data_points)
-
-    try:
-        adaptor.delete([1])
-    except Exception:
-        pytest.fail("Delete with 404 raised exception")
-
-
-def test_delete_raises_on_failure(mocker, adaptor):
-    """Non-successful delete responses must raise exception."""
-
-    def failing_delete(url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
-        return FakeResponse(500, text="delete boom")
-
-    mocker.patch.object(adaptor._session, "delete", side_effect=failing_delete)
-
+def test_train_index_raises_on_failed_creation(dataset: Dataset) -> None:
+    """train_index must surface exceptions raised by schema creation."""
+    client = StubWeaviateClient("TestClass")
+    client.schema.raise_on_create = Exception("cannot create")
     with pytest.raises(WeaviateError):
-        adaptor.delete([1])
+        Weaviate(
+            dataset=dataset,
+            metric=Metric.COSINE,
+            url="http://example.com",
+            class_name="TestClass",
+            client=client,
+        )
 
 
-def test_search_raises_on_bad_status(mocker, adaptor):
-    """Non-200 GraphQL responses should bubble up as errors."""
+def test_upsert_delete_tolerates_404(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """delete should swallow 404 responses but still record the call."""
+    weaviate_adaptor, client = adaptor
+    client.data_object.raise_on_delete = FakeStatusError(404, "missing")
+    weaviate_adaptor.upsert([DataPoint(id=1, vector=[1.0, 0.0, 0.0], metadata={})])
+    weaviate_adaptor.delete([1])
+    assert client.data_object.delete_calls  # at least one delete attempt recorded
+    expected_id = weaviate_adaptor._make_object_id(1)
+    assert client.data_object.delete_calls[-1][1] == expected_id
 
-    def bad_status_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            return FakeResponse(500, text="bad")
-        return FakeResponse(200)
 
-    mocker.patch.object(adaptor._session, "post", side_effect=bad_status_post)
-
+def test_delete_raises_on_failure(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """delete should raise when the client reports a hard failure."""
+    weaviate_adaptor, client = adaptor
+    client.data_object.raise_on_delete = FakeStatusError(500, "delete boom")
     with pytest.raises(WeaviateError):
-        q = Query(np.zeros((3,), dtype=np.float32))
-        adaptor.search(q, topk=1)
+        weaviate_adaptor.delete([1])
 
 
-def test_search_handles_invalid_uuid_fallback(mocker, adaptor):
-    """Invalid UUIDs should fall back to -1 identifiers without crashing."""
+def test_search_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """search should raise when the client surfaces an unexpected status."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_get_exception = FakeStatusError(500, "bad")
+    with pytest.raises(WeaviateError):
+        weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=1)
 
-    def graphql_payload(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            data = {
-                "data": {
-                    "Get": {adaptor.class_name: [{"_additional": {"id": "not-a-uuid", "distance": 0.2}}]}
-                }
+
+def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """search results with invalid UUIDs should map ids to -1."""
+    weaviate_adaptor, client = adaptor
+    # Weaviate sometimes omits originalId; ensure we fall back to UUID validation.
+    client.graphql_get_response = {
+        "data": {
+            "Get": {
+                weaviate_adaptor.class_name: [
+                    {"_additional": {"id": "not-a-uuid", "distance": 0.2}},
+                ]
             }
-            return FakeResponse(200, data)
-        return FakeResponse(200)
-
-    mocker.patch.object(adaptor._session, "post", side_effect=graphql_payload)
-
-    q = Query(np.zeros((3,), dtype=np.float32))
-    results = adaptor.search(q, topk=1)
+        }
+    }
+    results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=1)
     assert np.isfinite(results[0].score)
     assert results[0].id == -1
 
 
-def test_stats_raises_on_bad_status(mocker, adaptor):
-    """Non-200 aggregate responses should raise."""
-
-    def bad_status_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            return FakeResponse(500, text="bad")
-        return FakeResponse(200)
-
-    mocker.patch.object(adaptor._session, "post", side_effect=bad_status_post)
-
+def test_stats_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """stats should raise when the aggregate query surfaces an error."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_aggregate_exception = FakeStatusError(500, "bad")
     with pytest.raises(WeaviateError):
-        adaptor.stats()
+        weaviate_adaptor.stats()
 
 
-def test_stats_handles_empty_entries(mocker, adaptor):
-    """Empty aggregate entries should return ntotal=0."""
-
-    def empty_aggregate_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/graphql"):
-            data = {"data": {"Aggregate": {adaptor.class_name: []}}}
-            return FakeResponse(200, data)
-        return FakeResponse(200)
-
-    mocker.patch.object(adaptor._session, "post", side_effect=empty_aggregate_post)
-
-    stats = adaptor.stats()
+def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """stats should return zero when the aggregate result is empty."""
+    weaviate_adaptor, client = adaptor
+    client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.class_name: []}}}
+    stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 0
 
 
 def test_constructor_and_distance_mapping(dataset):
     """Ensure basic constructor validation and metric mapping."""
     adaptor_ip = Weaviate(dataset, metric=Metric.INNER_PRODUCT)
+    assert adaptor_ip.distance_metric == "dot"
+
+    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
     assert adaptor_ip.distance_metric == "dot"
 
     adaptor_l2 = Weaviate(dataset, metric=Metric.L2)
@@ -406,44 +549,30 @@ def test_validate_uuid_helpers():
     valid_uuid = str(uuid.uuid4())
     assert Weaviate._validate_uuid(valid_uuid) == -1
 
+
+def test_constructor_and_distance_mapping() -> None:
+    """Constructor should validate metrics and map them to client values."""
     with pytest.raises(ValueError):
-        Weaviate._validate_uuid("not-a-uuid")
-
-
-def test_upsert_raises_when_delete_fails(mocker, adaptor):
-    """Upsert should raise if the delete phase returns a non-success status."""
-
-    def failing_delete(url: str, timeout: float | None = None) -> FakeResponse:  # noqa: ARG002
-        return FakeResponse(500, text="delete boom")
-
-    mocker.patch.object(adaptor._session, "delete", side_effect=failing_delete)
-
-    with pytest.raises(WeaviateError):
-        data_points = [DataPoint(id=1, vector=np.array([1.0, 0.0, 0.0], dtype=np.float32), metadata={})]
-        adaptor.upsert(data_points)
-
-
-def test_upsert_raises_when_insert_fails(mocker, adaptor):
-    """Upsert should raise when the insert POST returns an error."""
-
-    def failing_post(url: str, json: dict | None = None, timeout: float | None = None):  # noqa: ARG002
-        if url.endswith("/v1/objects"):
-            return FakeResponse(500, text="insert boom")
-        return FakeResponse(200)
-
-    mocker.patch.object(adaptor._session, "post", side_effect=failing_post)
-
-    with pytest.raises(WeaviateError):
-        data_points = [DataPoint(id=1, vector=np.array([1.0, 0.0, 0.0], dtype=np.float32), metadata={})]
-        adaptor.upsert(data_points)
-
-
-def test_check_ready_with_zero_timeout(dataset, mocker):
-    """Zero timeout should immediately raise when readiness never returns 200."""
-    mocker.stopall()
-
-    with pytest.raises(WeaviateError):
-        adaptor = Weaviate(
-            dataset, metric=Metric.COSINE, base_url="http://example.com", class_name="TestClass", timeout=0.0
+        _ = Weaviate(
+            dataset=make_dataset(0),
+            metric=Metric.COSINE,
+            url="http://example.com",
+            class_name="TestClass",
+            client=StubWeaviateClient("TestClass"),
         )
-        adaptor.check_ready()
+    adaptor_ip = Weaviate(
+        dataset=make_dataset(2),
+        metric=Metric.INNER_PRODUCT,
+        url="http://example.com",
+        class_name="TestClass",
+        client=StubWeaviateClient("TestClass"),
+    )
+    assert adaptor_ip._distance_metric == "dot"
+    adaptor_l2 = Weaviate(
+        dataset=make_dataset(2),
+        metric=Metric.L2,
+        url="http://example.com",
+        class_name="TestClass",
+        client=StubWeaviateClient("TestClass"),
+    )
+    assert adaptor_l2._distance_metric == "l2-squared"

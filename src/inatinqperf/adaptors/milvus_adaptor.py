@@ -2,25 +2,18 @@
 
 from collections.abc import Sequence
 from enum import Enum
-import os
-from tqdm import tqdm
-from datasets import load_dataset, Dataset as HuggingFaceDataset
 
-import numpy as np
+from datasets import Dataset as HuggingFaceDataset
 from loguru import logger
 from pymilvus import (
-    Collection,
     DataType,
-    FieldSchema,
-    CollectionSchema,
     MilvusClient,
     connections,
     utility,
 )
+from tqdm import tqdm
 
-from pymilvus.bulk_writer import LocalBulkWriter, BulkFileType
-
-from inatinqperf.adaptors.base import VectorDatabase, DataPoint, Query, SearchResult
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
 
 
@@ -60,7 +53,7 @@ class Milvus(VectorDatabase):
         # Remove collection if it already exists
         if self.client.has_collection(self.COLLECTION_NAME):
             self.client.drop_collection(self.COLLECTION_NAME)
-        
+
         # Define collection schema
         self.schema = self.client.create_schema(
             auto_id=False,
@@ -94,26 +87,24 @@ class Milvus(VectorDatabase):
                 batch_data.append({"id": rid, "vector": vec})
             self.client.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
 
-        
         self.client.load_collection(collection_name=self.COLLECTION_NAME)
 
     def _translate_metric(self, metric: Metric) -> str:
         """Translate metric to Milvus metric type."""
         if metric == Metric.INNER_PRODUCT:
             return "IP"
-        elif metric == Metric.COSINE:
+        if metric == Metric.COSINE:
             return "COSINE"
-        elif metric == Metric.L2:
+        if metric == Metric.L2:
             return "L2"
-        else:
-            raise ValueError(f"Unsupported metric: {metric}")
-    
+
+        msg = f"{metric} metric specified is not a valid one for Milvus."
+        raise ValueError(msg)
+
     def upsert(self, x: Sequence[DataPoint]) -> None:
         """Upsert vectors with given IDs."""
 
-        data = []
-        for dp in x:
-            data.append({"id": dp.id, "vector": dp.vector})
+        data = [{"id": int(dp.id), "vector": dp.vector} for dp in x]
 
         self.client.upsert(collection_name=self.COLLECTION_NAME, data=data)
 
@@ -121,7 +112,7 @@ class Milvus(VectorDatabase):
         """Delete vectors with given IDs."""
         self.client.delete(collection_name=self.COLLECTION_NAME, ids=ids)
 
-    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
+    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
         """Search for top-k nearest neighbors."""
         results = self.client.search(
             collection_name=self.COLLECTION_NAME, data=[q.vector], topk=topk, metric=self.metric
@@ -134,10 +125,9 @@ class Milvus(VectorDatabase):
             hit_distances = result.distances
             for hit_id, hit_distance in zip(hit_ids, hit_distances):
                 search_results.append(SearchResult(id=hit_id, score=hit_distance))
-        
+
         return search_results
 
     def stats(self) -> None:
         """Return index statistics."""
-        # return {"ntotal": 1}
         return self.client.describe_index(collection_name=self.COLLECTION_NAME, index_name=self.INDEX_NAME)

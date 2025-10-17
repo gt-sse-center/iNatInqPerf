@@ -2,18 +2,11 @@
 
 from collections.abc import Generator, Sequence
 
-import numpy as np
 from loguru import logger
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Distance,
-    HnswConfigDiff,
-    PointStruct,
-    SearchParams,
-    VectorParams,
-)
+from qdrant_client import QdrantClient, models
+from qdrant_client.models import Distance, PointStruct
 
-from inatinqperf.adaptors.base import SearchResult, VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.metric import Metric
 
 
@@ -33,6 +26,7 @@ class Qdrant(VectorDatabase):
         collection_name: str,
         m: int = 32,
         ef_construct: int = 128,
+        **params,  # noqa: ARG002
     ) -> None:
         self.client = QdrantClient(url=url)
         self.collection_name = collection_name
@@ -40,16 +34,24 @@ class Qdrant(VectorDatabase):
         self.m = m
         self.ef_construct = ef_construct
 
+        if self.client.collection_exists(collection_name=collection_name):
+            logger.info("Deleted existing collection")
+            self.client.delete_collection(collection_name=collection_name)
+
         if not self.client.collection_exists(collection_name=collection_name):
-            logger.info(f"Creating collection {collection_name}")
+            logger.patch(lambda r: r.update(function="constructor")).info(
+                f"Creating collection {collection_name}"
+            )
             self.client.create_collection(
                 collection_name=collection_name,
-                vectors_config=VectorParams(
+                vectors_config=models.VectorParams(
                     size=dim,
                     distance=self._translate_metric(metric),
-                    hnsw_config=HnswConfigDiff(
+                    hnsw_config=models.HnswConfigDiff(
                         m=m,
                         ef_construct=ef_construct,
+                        max_indexing_threads=0,
+                        on_disk=False,
                     ),
                 ),
             )
@@ -69,57 +71,44 @@ class Qdrant(VectorDatabase):
         msg = f"{metric} metric specified is not a valid one for Qdrant."
         raise ValueError(msg)
 
-    def train_index(self, x_train: np.ndarray) -> None:
-        """For Qdrant, the HNSW index is created when the collection is created.
-
-        Nothing to do here.
-        """
-
-    def drop_index(self) -> None:
-        """Drop the index by deleting the collection."""
-        self.client.delete_collection(self.collection_name)
-
     @staticmethod
-    def _points_iterator(ids: Sequence[int], vectors: np.ndarray) -> Generator[PointStruct]:
+    def _points_iterator(data_points: Sequence[DataPoint]) -> Generator[PointStruct]:
         """A generator to help with creating PointStructs."""
-        for idx, vector in zip(ids, vectors, strict=True):
-            yield PointStruct(id=idx, vector=vector)
+        for data_point in data_points:
+            yield PointStruct(id=data_point.id, vector=data_point.vector)
 
-    def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
+    def upsert(self, x: Sequence[DataPoint]) -> None:
         """Upsert vectors with given IDs. This also builds the HNSW index."""
-        # Qdrant requires list of ints
-        ids = ids.tolist()
-
         # Qdrant will override points with the same ID if they already exist,
         # which is the same behavior as `upsert`.
         # Hence we use `upload_points` for performance.
         logger.info("Uploading points to database")
         self.client.upload_points(
             collection_name=self.collection_name,
-            points=self._points_iterator(ids=ids, vectors=x),
+            points=self._points_iterator(data_points=x),
             parallel=4,
             wait=True,
         )
 
-    def search(self, q: np.ndarray, topk: int, **kwargs) -> Sequence[SearchResult]:
+    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
         """Search for top-k nearest neighbors."""
         # Has support for attribute filter: https://qdrant.tech/documentation/quickstart/#add-a-filter
 
         ef = kwargs.get("ef", 128)
         search_result = self.client.query_points(
             collection_name=self.collection_name,
-            query=q,
+            query=q.vector,
             with_payload=False,
             with_vectors=False,
             limit=topk,
-            search_params=SearchParams(hnsw_ef=ef, exact=False),
+            search_params=models.SearchParams(hnsw_ef=ef, exact=False),
         )
 
         return [SearchResult(point.id, point.score) for point in search_result.points]
 
-    def delete(self, ids: np.ndarray[int]) -> None:
+    def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
-        self.client.delete(collection_name=self.collection_name, points_selector=ids.tolist())
+        self.client.delete(collection_name=self.collection_name, points_selector=ids)
 
     def delete_collection(self) -> None:
         """Delete the collection associated with this adaptor instance."""

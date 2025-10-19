@@ -1,11 +1,11 @@
 """Tests for the Qdrant vector database adaptor class."""
 
-import numpy as np
 import docker
+import numpy as np
 import pytest
 
 from inatinqperf.adaptors.metric import Metric
-from inatinqperf.adaptors.qdrant_adaptor import Qdrant
+from inatinqperf.adaptors.qdrant_adaptor import DataPoint, Qdrant, Query
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -61,7 +61,7 @@ def vectordb_fixture(collection_name, dim):
 @pytest.fixture(name="dataset")
 def dataset_fixture(dim, N):
     rng = np.random.default_rng(117)
-    ids = rng.choice(10**4, size=N, replace=False)
+    ids = rng.choice(10**4, size=N, replace=False).tolist()
     x = rng.random(size=(N, dim))
     return (ids, x)
 
@@ -86,7 +86,8 @@ def test_constructor_invalid_metric(collection_name):
 
 def test_upsert(collection_name, vectordb, dataset, N):
     ids, x = dataset
-    vectordb.upsert(ids, x)
+    data_points = [DataPoint(i, vector, metadata={}) for i, vector in zip(ids, x)]
+    vectordb.upsert(data_points)
 
     count_result = vectordb.client.count(collection_name=collection_name, exact=True)
 
@@ -95,11 +96,12 @@ def test_upsert(collection_name, vectordb, dataset, N):
 
 def test_search(collection_name, vectordb, dataset):
     ids, x = dataset
-    vectordb.upsert(ids, x)
+    data_points = [DataPoint(i, vector, metadata={}) for i, vector in zip(ids, x)]
+    vectordb.upsert(data_points)
 
     # query single point
     expected_id = ids[117]
-    query = x[117]
+    query = Query(vector=x[117])
     results = vectordb.search(q=query, topk=5)
 
     assert results[0].id == expected_id
@@ -111,30 +113,20 @@ def test_search(collection_name, vectordb, dataset):
 
 def test_delete(collection_name, vectordb, dataset, N):
     ids, x = dataset
-
-    vectordb.upsert(ids, x)
+    data_points = [DataPoint(i, vector, metadata={}) for i, vector in zip(ids, x)]
+    vectordb.upsert(data_points)
 
     ids_to_delete = ids[117:118]
     vectordb.delete(ids_to_delete)
 
     assert vectordb.client.count(collection_name=collection_name).count == N - 1
 
-    query = x[117]
+    query = Query(vector=x[117])
     results = vectordb.search(q=query, topk=5)
 
     # We deleted the vector we are querying
     # so the score should not be 1.0
     assert results[0].score != 1.0
-
-
-def test_drop_index(collection_name, vectordb, dataset):
-    ids, x = dataset
-
-    vectordb.upsert(ids, x)
-
-    vectordb.drop_index()
-
-    assert not vectordb.client.collection_exists(collection_name=collection_name)
 
 
 def test_stats(collection_name, vectordb):

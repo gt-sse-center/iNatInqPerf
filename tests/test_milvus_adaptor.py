@@ -27,7 +27,6 @@ index_params = {
 @pytest.fixture(scope="module", autouse=True)
 def container_fixture():
     """Start the docker container with the vector DB."""
-    # client = docker.from_env()
 
     subprocess.run(
         ["docker", "compose", "-f", "milvus-standalone-docker-compose.yml", "up", "-d"], check=True

@@ -29,7 +29,9 @@ def container_fixture():
     """Start the docker container with the vector DB."""
     # client = docker.from_env()
 
-    subprocess.run(["docker", "compose", "-f", "milvus-standalone-docker-compose.yml", "up", "-d"], check=True)
+    subprocess.run(
+        ["docker", "compose", "-f", "milvus-standalone-docker-compose.yml", "up", "-d"], check=True
+    )
     yield
     subprocess.run(["docker", "compose", "-f", "milvus-standalone-docker-compose.yml", "down"], check=True)
 
@@ -85,7 +87,17 @@ def vectordb_fixture(dataset):
 
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.COSINE, Metric.L2])
-@pytest.mark.parametrize("index_type", [MilvusIndexType.HNSW, MilvusIndexType.HNSW_SQ, MilvusIndexType.HNSW_PQ, MilvusIndexType.IVF_FLAT, MilvusIndexType.IVF_SQ8, MilvusIndexType.IVF_PQ])
+@pytest.mark.parametrize(
+    "index_type",
+    [
+        MilvusIndexType.HNSW,
+        MilvusIndexType.HNSW_SQ,
+        MilvusIndexType.HNSW_PQ,
+        MilvusIndexType.IVF_FLAT,
+        MilvusIndexType.IVF_SQ8,
+        MilvusIndexType.IVF_PQ,
+    ],
+)
 def test_constructor(dataset, metric, index_type):
     """Test Milvus constructor with different metrics."""
     vectordb = Milvus(
@@ -100,8 +112,9 @@ def test_constructor(dataset, metric, index_type):
     vectordb.client.flush(collection_name=vectordb.COLLECTION_NAME)
 
     assert vectordb.client.has_collection(vectordb.COLLECTION_NAME)
-    
+
     vectordb.teardown()
+
 
 def test_upsert(vectordb):
     """Test upserting vectors."""
@@ -110,9 +123,7 @@ def test_upsert(vectordb):
     new_ids = rng.choice(10**5, size=10, replace=False).tolist()
     new_vectors = rng.random(size=(10, vectordb.dim))
 
-    data_points = [
-        DataPoint(i, vector, metadata={}) for i, vector in zip(new_ids, new_vectors)
-    ]
+    data_points = [DataPoint(i, vector, metadata={}) for i, vector in zip(new_ids, new_vectors)]
     vectordb.upsert(data_points)
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
@@ -158,6 +169,7 @@ def test_stats(vectordb):
     # Check that stats contain expected keys for Milvus index
     assert "index_type" in stats
     assert "metric_type" in stats
+
 
 def test_translate_metric():
     """Test translating metric to Milvus metric type."""

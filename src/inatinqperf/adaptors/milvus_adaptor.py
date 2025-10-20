@@ -44,7 +44,15 @@ class Milvus(VectorDatabase):
     INDEX_NAME: str = f"{COLLECTION_NAME}_index"
 
     @logger.catch
-    def __init__(self, dataset: HuggingFaceDataset, metric: Metric, index_type: MilvusIndexType | str, index_params: dict = {}, host: str = "localhost", port: str = "19530") -> None:
+    def __init__(
+        self,
+        dataset: HuggingFaceDataset,
+        metric: Metric,
+        index_type: MilvusIndexType | str,
+        index_params: dict | None = None,
+        host: str = "localhost",
+        port: str = "19530",
+    ) -> None:
         super().__init__(dataset, metric)
         self.host = host
         self.port = port
@@ -77,7 +85,7 @@ class Milvus(VectorDatabase):
             index_type=self.index_type.value,
             index_name=self.INDEX_NAME,
             metric_type=self.metric,
-            params=index_params
+            params=index_params if index_params else {},
         )
 
         self.client.create_collection(
@@ -126,7 +134,11 @@ class Milvus(VectorDatabase):
     def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
         """Search for top-k nearest neighbors."""
         results = self.client.search(
-            collection_name=self.COLLECTION_NAME, anns_field="vector", data=[q.vector], limit=topk, search_params={"metric_type": self.metric}
+            collection_name=self.COLLECTION_NAME,
+            anns_field="vector",
+            data=[q.vector],
+            limit=topk,
+            search_params={"metric_type": self.metric},
         )
 
         search_results = []
@@ -139,14 +151,12 @@ class Milvus(VectorDatabase):
             for hit_id, hit_distance in zip(hit_ids, hit_distances):
                 search_results.append(SearchResult(id=hit_id, score=hit_distance))
 
-        logger.info(f"Search results: {search_results}")
-        # assert len(search_results) == topk
         return search_results
 
     def stats(self) -> None:
         """Return index statistics."""
         return self.client.describe_index(collection_name=self.COLLECTION_NAME, index_name=self.INDEX_NAME)
-    
+
     def teardown(self) -> None:
         """Teardown the Milvus vector database."""
         self.client.drop_collection(self.COLLECTION_NAME)

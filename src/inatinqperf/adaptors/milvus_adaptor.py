@@ -17,7 +17,7 @@ from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorData
 from inatinqperf.adaptors.metric import Metric
 
 
-class MilvusIndexType(Enum):
+class MilvusIndexType(str, Enum):
     """Enum for various index types supported by Milvus. For more details, see https://milvus.io/docs/index.md?tab=floating."""
 
     IVF_FLAT = "IVF_FLAT"
@@ -27,6 +27,14 @@ class MilvusIndexType(Enum):
     HNSW_SQ = "HNSW_SQ"
     HNSW_PQ = "HNSW_PQ"
 
+    @classmethod
+    def _missing_(cls, value: str) -> "MilvusIndexType | None":
+        value = value.lower()
+        for member in cls:
+            if member.value.lower() == value:
+                return member
+        return None
+
 
 class Milvus(VectorDatabase):
     """Milvus vector database."""
@@ -34,12 +42,13 @@ class Milvus(VectorDatabase):
     DATABASE_NAME: str = "default"
     COLLECTION_NAME: str = "collection_name"
     INDEX_NAME: str = f"{COLLECTION_NAME}_index"
-    SERVER_HOST = "localhost"
-    SERVER_PORT = "19530"  # default milvus server port
 
     @logger.catch
-    def __init__(self, dataset: HuggingFaceDataset, metric: Metric, index_type: MilvusIndexType) -> None:
+    def __init__(self, dataset: HuggingFaceDataset, metric: Metric, index_type: MilvusIndexType | str, index_params: dict = {}, host: str = "localhost", port: str = "19530") -> None:
         super().__init__(dataset, metric)
+        self.host = host
+        self.port = port
+        self.index_type = MilvusIndexType(index_type)
         try:
             connections.connect(host="localhost", port="19530")
             server_type = utility.get_server_type()
@@ -47,7 +56,7 @@ class Milvus(VectorDatabase):
         except Exception:
             logger.exception("Milvus server is not running or connection failed")
 
-        self.client = MilvusClient(uri=f"http://{self.SERVER_HOST}:{self.SERVER_PORT}")
+        self.client = MilvusClient(uri=f"http://{self.host}:{self.port}")
         self.metric = self._translate_metric(metric)
 
         # Remove collection if it already exists
@@ -65,9 +74,10 @@ class Milvus(VectorDatabase):
         self.index_params = self.client.prepare_index_params()
         self.index_params.add_index(
             field_name="vector",
-            index_type=index_type,
+            index_type=self.index_type.value,
             index_name=self.INDEX_NAME,
             metric_type=self.metric,
+            params=index_params
         )
 
         self.client.create_collection(
@@ -89,7 +99,8 @@ class Milvus(VectorDatabase):
 
         self.client.load_collection(collection_name=self.COLLECTION_NAME)
 
-    def _translate_metric(self, metric: Metric) -> str:
+    @staticmethod
+    def _translate_metric(metric: Metric) -> str:
         """Translate metric to Milvus metric type."""
         if metric == Metric.INNER_PRODUCT:
             return "IP"
@@ -115,10 +126,12 @@ class Milvus(VectorDatabase):
     def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
         """Search for top-k nearest neighbors."""
         results = self.client.search(
-            collection_name=self.COLLECTION_NAME, data=[q.vector], topk=topk, metric=self.metric
+            collection_name=self.COLLECTION_NAME, anns_field="vector", data=[q.vector], limit=topk, search_params={"metric_type": self.metric}
         )
 
         search_results = []
+
+        logger.info(f"Results: {results}")
 
         for result in results:
             hit_ids = result.ids
@@ -126,8 +139,16 @@ class Milvus(VectorDatabase):
             for hit_id, hit_distance in zip(hit_ids, hit_distances):
                 search_results.append(SearchResult(id=hit_id, score=hit_distance))
 
+        logger.info(f"Search results: {search_results}")
+        # assert len(search_results) == topk
         return search_results
 
     def stats(self) -> None:
         """Return index statistics."""
         return self.client.describe_index(collection_name=self.COLLECTION_NAME, index_name=self.INDEX_NAME)
+    
+    def teardown(self) -> None:
+        """Teardown the Milvus vector database."""
+        self.client.drop_collection(self.COLLECTION_NAME)
+        self.client.close()
+        connections.disconnect(alias="default")

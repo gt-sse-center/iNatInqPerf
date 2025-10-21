@@ -5,7 +5,7 @@ import pytest
 
 from inatinqperf.adaptors import faiss_adaptor
 from inatinqperf.adaptors.faiss_adaptor import Faiss, HuggingFaceDataset, Query, DataPoint
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 
 @pytest.fixture(name="small_data")

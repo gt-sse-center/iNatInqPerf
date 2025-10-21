@@ -16,7 +16,7 @@ import pytest
 from datasets import Dataset
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateError
 
 

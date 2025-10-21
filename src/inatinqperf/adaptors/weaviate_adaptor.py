@@ -21,7 +21,7 @@ from loguru import logger
 from weaviate import Client as WeaviateClient
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 
 class WeaviateError(RuntimeError):

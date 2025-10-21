@@ -1,7 +1,6 @@
 """Milvus adaptor."""
 
 from collections.abc import Sequence
-from enum import Enum
 
 from datasets import Dataset as HuggingFaceDataset
 from loguru import logger
@@ -14,10 +13,10 @@ from pymilvus import (
 from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import IndexTypeBase, Metric
 
 
-class MilvusIndexType(str, Enum):
+class MilvusIndexType(IndexTypeBase):
     """Enum for various index types supported by Milvus. For more details, see https://milvus.io/docs/index.md?tab=floating."""
 
     IVF_FLAT = "IVF_FLAT"
@@ -26,14 +25,6 @@ class MilvusIndexType(str, Enum):
     HNSW = "HNSW"
     HNSW_SQ = "HNSW_SQ"
     HNSW_PQ = "HNSW_PQ"
-
-    @classmethod
-    def _missing_(cls, value: str) -> "MilvusIndexType | None":
-        value = value.lower()
-        for member in cls:
-            if member.value.lower() == value:
-                return member
-        return None
 
 
 class Milvus(VectorDatabase):

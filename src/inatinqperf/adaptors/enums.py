@@ -23,3 +23,15 @@ class Metric(str, enum.Enum):
             if member.value == value:
                 return member
         return None
+
+
+class IndexTypeBase(str, enum.Enum):
+    """Base class enum for Vector Database index type."""
+
+    @classmethod
+    def _missing_(cls, value: str) -> "IndexTypeBase | None":
+        value = value.lower()
+        for member in cls:
+            if member.value == value:
+                return member
+        return None

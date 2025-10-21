@@ -8,7 +8,7 @@ from datasets import Dataset
 
 from inatinqperf import adaptors
 from inatinqperf.adaptors.base import DataPoint, SearchResult, VectorDatabase
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.benchmark import Benchmarker, benchmark
 from inatinqperf.benchmark.configuration import VectorDatabaseParams
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings

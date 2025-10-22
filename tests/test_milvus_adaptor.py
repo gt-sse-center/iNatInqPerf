@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from datasets import Dataset as HuggingFaceDataset
 
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.milvus_adaptor import (
     DataPoint,
     Milvus,

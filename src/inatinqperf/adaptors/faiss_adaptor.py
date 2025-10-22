@@ -1,6 +1,5 @@
 """FAISS vector database adaptor."""
 
-import enum
 from collections.abc import Sequence
 
 import faiss
@@ -14,10 +13,10 @@ from inatinqperf.adaptors.base import (
     SearchResult,
     VectorDatabase,
 )
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import IndexTypeBase, Metric
 
 
-class FaissIndexType(str, enum.Enum):
+class FaissIndexType(IndexTypeBase):
     """Enum for index types used with FAISS."""
 
     FLAT = "flat"

@@ -5,10 +5,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
-import tqdm
 import yaml
 from datasets import Dataset
 from loguru import logger
+from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
@@ -158,7 +158,7 @@ class Benchmarker:
         logger.info("Performing search on baseline")
         with Profiler("search-baseline-FaissFlat") as p:
             i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
-            for i in tqdm.tqdm(range(q.shape[0])):
+            for i in tqdm(range(q.shape[0])):
                 base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
                 padded = _ids_to_fixed_array(base_results, topk)
                 i0[i] = padded
@@ -167,7 +167,7 @@ class Benchmarker:
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
         with Profiler(f"search-{self.cfg.vectordb.type}") as p:
             latencies = []
-            for i in tqdm.tqdm(range(q.shape[0])):
+            for i in tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
                 vectordb.search(Query(q[i]), topk, **params.to_dict())
                 latencies.append((time.perf_counter() - t0) * 1000.0)
@@ -177,7 +177,7 @@ class Benchmarker:
         logger.info("recall@K (compare last retrieved to baseline per query")
         # For simplicity compute approximate on whole Q at once:
         i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
-        for i in tqdm.tqdm(range(q.shape[0])):
+        for i in tqdm(range(q.shape[0])):
             results = vectordb.search(Query(q[i]), topk, **params.to_dict())
             padded = _ids_to_fixed_array(results, topk)
             i1[i] = padded

@@ -28,11 +28,7 @@ class MilvusIndexType(IndexTypeBase):
 
 
 class Milvus(VectorDatabase):
-    """Milvus vector database."""
-
-    DATABASE_NAME: str = "default"
-    COLLECTION_NAME: str = "collection_name"
-    INDEX_NAME: str = f"{COLLECTION_NAME}_index"
+    """Adaptor to help work with Milvus vector database."""
 
     @logger.catch
     def __init__(
@@ -43,11 +39,15 @@ class Milvus(VectorDatabase):
         index_params: dict | None = None,
         host: str = "localhost",
         port: str = "19530",
+        collection_name: str = "default_collection",
     ) -> None:
         super().__init__(dataset, metric)
         self.host = host
         self.port = port
         self.index_type = MilvusIndexType(index_type)
+        self.index_name: str = f"{collection_name}_index"
+        self.collection_name = collection_name
+
         try:
             connections.connect(host="localhost", port="19530")
             server_type = utility.get_server_type()
@@ -55,12 +55,12 @@ class Milvus(VectorDatabase):
         except Exception:
             logger.exception("Milvus server is not running or connection failed")
 
-        self.client = MilvusClient(uri=f"http://{self.host}:{self.port}")
+        self.client = MilvusClient(uri=f"http://{host}:{port}")
         self.metric = self._translate_metric(metric)
 
         # Remove collection if it already exists
-        if self.client.has_collection(self.COLLECTION_NAME):
-            self.client.drop_collection(self.COLLECTION_NAME)
+        if self.client.has_collection(self.collection_name):
+            self.client.drop_collection(self.collection_name)
 
         # Define collection schema
         self.schema = self.client.create_schema(
@@ -74,13 +74,13 @@ class Milvus(VectorDatabase):
         self.index_params.add_index(
             field_name="vector",
             index_type=self.index_type.value,
-            index_name=self.INDEX_NAME,
+            index_name=self.index_name,
             metric_type=self.metric,
             params=index_params if index_params else {},
         )
 
         self.client.create_collection(
-            collection_name=self.COLLECTION_NAME,
+            collection_name=self.collection_name,
             schema=self.schema,
             index_params=self.index_params,
         )
@@ -94,9 +94,10 @@ class Milvus(VectorDatabase):
                 rid = int(dataset[k]["id"])
                 vec = dataset[k]["embedding"]
                 batch_data.append({"id": rid, "vector": vec})
-            self.client.insert(collection_name=self.COLLECTION_NAME, data=batch_data)
+            self.client.insert(collection_name=self.collection_name, data=batch_data)
 
-        self.client.load_collection(collection_name=self.COLLECTION_NAME)
+        # loads the index files and fields raw data into memory for rapid response to searches and queries
+        self.client.load_collection(collection_name=self.collection_name)
 
     @staticmethod
     def _translate_metric(metric: Metric) -> str:
@@ -116,16 +117,19 @@ class Milvus(VectorDatabase):
 
         data = [{"id": int(dp.id), "vector": dp.vector} for dp in x]
 
-        self.client.upsert(collection_name=self.COLLECTION_NAME, data=data)
+        self.client.upsert(collection_name=self.collection_name, data=data)
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
-        self.client.delete(collection_name=self.COLLECTION_NAME, ids=ids)
+        self.client.delete(collection_name=self.collection_name, ids=ids)
 
     def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
-        """Search for top-k nearest neighbors."""
+        """Search for top-k nearest neighbors.
+
+        The score returned in this case is the distance, so smaller is better.
+        """
         results = self.client.search(
-            collection_name=self.COLLECTION_NAME,
+            collection_name=self.collection_name,
             anns_field="vector",
             data=[q.vector],
             limit=topk,
@@ -146,10 +150,10 @@ class Milvus(VectorDatabase):
 
     def stats(self) -> None:
         """Return index statistics."""
-        return self.client.describe_index(collection_name=self.COLLECTION_NAME, index_name=self.INDEX_NAME)
+        return self.client.describe_index(collection_name=self.collection_name, index_name=self.index_name)
 
     def teardown(self) -> None:
         """Teardown the Milvus vector database."""
-        self.client.drop_collection(self.COLLECTION_NAME)
+        self.client.drop_collection(self.collection_name)
         self.client.close()
         connections.disconnect(alias="default")

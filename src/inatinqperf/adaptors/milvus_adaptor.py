@@ -17,7 +17,10 @@ from inatinqperf.adaptors.enums import IndexTypeBase, Metric
 
 
 class MilvusIndexType(IndexTypeBase):
-    """Enum for various index types supported by Milvus. For more details, see https://milvus.io/docs/index.md?tab=floating."""
+    """Enum for various index types supported by Milvus.
+
+    For more details, see https://milvus.io/docs/index.md?tab=floating.
+    """
 
     IVF_FLAT = "IVF_FLAT"
     IVF_SQ8 = "IVF_SQ8"
@@ -35,21 +38,21 @@ class Milvus(VectorDatabase):
         self,
         dataset: HuggingFaceDataset,
         metric: Metric,
-        index_type: MilvusIndexType | str,
+        index_type: MilvusIndexType,
         index_params: dict | None = None,
         host: str = "localhost",
         port: str = "19530",
         collection_name: str = "default_collection",
+        batch_size: int = 1000,
     ) -> None:
         super().__init__(dataset, metric)
-        self.host = host
-        self.port = port
+
         self.index_type = MilvusIndexType(index_type)
         self.index_name: str = f"{collection_name}_index"
         self.collection_name = collection_name
 
         try:
-            connections.connect(host="localhost", port="19530")
+            connections.connect(host=host, port=port)
             server_type = utility.get_server_type()
             logger.info(f"Milvus server is running. Server type: {server_type}")
         except Exception:
@@ -63,15 +66,25 @@ class Milvus(VectorDatabase):
             self.client.drop_collection(self.collection_name)
 
         # Define collection schema
-        self.schema = self.client.create_schema(
-            auto_id=False,
-            enable_dynamic_schema=True,
+        schema = (
+            self.client.create_schema(
+                auto_id=False,
+                enable_dynamic_schema=True,
+            )
+            .add_field(
+                field_name="id",
+                datatype=DataType.INT64,
+                is_primary=True,
+            )
+            .add_field(
+                field_name="vector",
+                datatype=DataType.FLOAT_VECTOR,
+                dim=self.dim,
+            )
         )
-        self.schema.add_field(field_name="id", datatype=DataType.INT64, is_primary=True)
-        self.schema.add_field(field_name="vector", datatype=DataType.FLOAT_VECTOR, dim=self.dim)
 
-        self.index_params = self.client.prepare_index_params()
-        self.index_params.add_index(
+        # This calls `.add_index` internally
+        milvus_index_params = self.client.prepare_index_params(
             field_name="vector",
             index_type=self.index_type.value,
             index_name=self.index_name,
@@ -81,11 +94,9 @@ class Milvus(VectorDatabase):
 
         self.client.create_collection(
             collection_name=self.collection_name,
-            schema=self.schema,
-            index_params=self.index_params,
+            schema=schema,
+            index_params=milvus_index_params,
         )
-
-        batch_size = 1000
 
         for i in tqdm(range(0, len(dataset), batch_size)):
             batch_data = []

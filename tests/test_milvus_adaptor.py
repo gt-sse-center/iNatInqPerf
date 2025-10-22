@@ -190,7 +190,7 @@ def vectordb_fixture(dataset):
     )
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
-    vectordb.client.flush(collection_name=vectordb.COLLECTION_NAME)
+    vectordb.client.flush(collection_name=vectordb.collection_name)
 
     yield vectordb
 
@@ -220,28 +220,32 @@ def test_constructor(dataset, metric, index_type):
     )
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
-    vectordb.client.flush(collection_name=vectordb.COLLECTION_NAME)
+    vectordb.client.flush(collection_name=vectordb.collection_name)
 
-    assert vectordb.client.has_collection(vectordb.COLLECTION_NAME)
+    assert vectordb.client.has_collection(vectordb.collection_name)
 
     vectordb.teardown()
 
 
-def test_upsert(vectordb):
+def test_upsert(vectordb, N):
     """Test upserting vectors."""
     # Create new data points to upsert
     rng = np.random.default_rng(42)
-    new_ids = rng.choice(10**5, size=10, replace=False).tolist()
-    new_vectors = rng.random(size=(10, vectordb.dim))
+    M = 10  # num of new data points to add
+    new_ids = rng.choice(10**5, size=M, replace=False).tolist()
+    new_vectors = rng.random(size=(M, vectordb.dim))
 
     data_points = [DataPoint(i, vector, metadata={}) for i, vector in zip(new_ids, new_vectors)]
     vectordb.upsert(data_points)
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
-    vectordb.client.flush(collection_name=vectordb.COLLECTION_NAME)
+    vectordb.client.flush(collection_name=vectordb.collection_name)
 
     # Check that the collection still exists and has data
-    assert vectordb.client.has_collection(vectordb.COLLECTION_NAME)
+    assert vectordb.client.has_collection(vectordb.collection_name)
+
+    # Verify that the number of data points has increased correctly.
+    assert vectordb.client.get_collection_stats(vectordb.collection_name)["row_count"] == N + M
 
 
 def test_search(vectordb, dataset):
@@ -262,7 +266,7 @@ def test_delete(vectordb, dataset):
     vectordb.delete([id_to_delete])
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
-    vectordb.client.flush(collection_name=vectordb.COLLECTION_NAME)
+    vectordb.client.flush(collection_name=vectordb.collection_name)
 
     # Verify deletion by searching for the deleted vector
     query_vector = dataset[117]["embedding"]
@@ -280,6 +284,11 @@ def test_stats(vectordb):
     # Check that stats contain expected keys for Milvus index
     assert "index_type" in stats
     assert "metric_type" in stats
+
+    # regression
+    assert stats["index_type"] == "IVF_FLAT"
+    assert stats["metric_type"] == "L2"
+    assert stats["nlist"] == "100"
 
 
 def test_translate_metric():

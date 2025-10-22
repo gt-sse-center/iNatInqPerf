@@ -60,7 +60,7 @@ class Milvus(VectorDatabase):
         try:
             connections.connect(host="localhost", port="19530")
             server_type = utility.get_server_type()
-            logger.add(f"Milvus server is running. Server type: {server_type}")
+            logger.info(f"Milvus server is running. Server type: {server_type}")
         except Exception:
             logger.exception("Milvus server is not running or connection failed")
 

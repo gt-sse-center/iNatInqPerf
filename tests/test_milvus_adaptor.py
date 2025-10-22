@@ -3,7 +3,6 @@
 import docker
 import numpy as np
 import pytest
-import subprocess
 from datasets import Dataset as HuggingFaceDataset
 
 from inatinqperf.adaptors.metric import Metric
@@ -24,15 +23,128 @@ index_params = {
 }
 
 
-@pytest.fixture(scope="module", autouse=True)
-def container_fixture():
-    """Start the docker container with the vector DB."""
+@pytest.fixture(name="milvus_network", scope="module")
+def milvus_network_fixture():
+    client = docker.from_env()
 
-    subprocess.run(
-        ["docker", "compose", "-f", "milvus-standalone-docker-compose.yml", "up", "-d"], check=True
+    # If the network already exists, then remove it
+    for existing_network in client.networks.list():
+        if "milvus" == existing_network.name:
+            existing_network.remove()
+
+    network = client.networks.create("milvus", driver="bridge")
+
+    yield network
+
+    network.remove()
+
+
+@pytest.fixture(name="etcd_container", scope="module")
+def etcd_container_fixture(milvus_network):
+    client = docker.from_env()
+    container = client.containers.run(
+        "quay.io/coreos/etcd:v3.5.18",
+        name="milvus-etcd",
+        environment={
+            "ETCD_AUTO_COMPACTION_MODE": "revision",
+            "ETCD_AUTO_COMPACTION_RETENTION": "1000",
+            "ETCD_QUOTA_BACKEND_BYTES": "4294967296",
+            "ETCD_SNAPSHOT_COUNT": "50000",
+        },
+        hostname="etcd",  # This is the trick to getting the milvus-standalone to connect
+        ports={
+            2379: 2379,
+            2380: 2380,
+        },
+        volumes=["etcd:/etcd"],
+        command="etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd",
+        healthcheck={
+            "test": ["CMD", "etcdctl", "endpoint", "health"],
+            "interval": 30 * 10**9,
+            "timeout": 20 * 10**9,
+            "retries": 3,
+        },
+        network="milvus",
+        remove=True,
+        detach=True,  # enabled so we get back a Container object
     )
-    yield
-    subprocess.run(["docker", "compose", "-f", "milvus-standalone-docker-compose.yml", "down"], check=True)
+
+    yield container
+
+    container.stop()
+
+
+@pytest.fixture(name="minio_container", scope="module")
+def minio_container_fixture(milvus_network):
+    client = docker.from_env()
+    container = client.containers.run(
+        name="milvus-minio",
+        image="minio/minio:RELEASE.2024-12-18T13-15-44Z",
+        environment={
+            "MINIO_ACCESS_KEY": "minioadmin",
+            "MINIO_SECRET_KEY": "minioadmin",
+        },
+        hostname="minio",  # This is the trick to getting the milvus-standalone to connect
+        ports={
+            9001: 9001,
+            9000: 9000,
+        },
+        volumes=["minio:/minio_data"],
+        command='minio server /minio_data --console-address ":9001"',
+        healthcheck={
+            "test": ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"],
+            "interval": 30 * 10**9,
+            "timeout": 20 * 10**9,
+            "retries": 3,
+        },
+        network="milvus",
+        remove=True,
+        detach=True,  # enabled so we get back a Container object
+    )
+
+    yield container
+
+    container.stop()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def container_fixture(etcd_container, minio_container, milvus_network):
+    """Start the Milvus docker container with the vector DB."""
+
+    client = docker.from_env()
+    assert client.containers.get(etcd_container.name).status == "running"
+    assert client.containers.get(minio_container.name).status == "running"
+
+    container = client.containers.run(
+        name="milvus-standalone",
+        image="milvusdb/milvus:v2.6.3",
+        command=["milvus", "run", "standalone"],
+        security_opt=["seccomp:unconfined"],
+        environment={
+            "ETCD_ENDPOINTS": "etcd:2379",
+            "MINIO_ADDRESS": "minio:9000",
+            "MQ_TYPE": "woodpecker",
+        },
+        volumes=["milvus:/var/lib/milvus"],
+        healthcheck={
+            "test": ["CMD", "curl", "-f", "http://localhost:9091/healthz"],
+            "interval": 30 * 10**9,
+            "start_period": 90 * 10**9,
+            "timeout": 20 * 10**9,
+            "retries": 3,
+        },
+        ports={
+            19530: 19530,
+            9091: 9091,
+        },
+        network="milvus",
+        remove=True,
+        detach=True,  # enabled so we get back a Container object
+    )
+
+    yield container
+
+    container.stop()
 
 
 @pytest.fixture(name="collection_name")

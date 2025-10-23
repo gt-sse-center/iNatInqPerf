@@ -6,10 +6,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import tqdm
 from datasets import Dataset, Features, Value, load_from_disk
 from datasets import Sequence as HFSequence
 from PIL import Image
+from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
 
 _EMBED_MATRIX_NDIM = 2
@@ -85,7 +85,7 @@ def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> ImageDatasetW
     imgs = [pilify(r["image"]) for r in ds]
 
     embeddings, ids, labels = [], [], []
-    for i in tqdm.tqdm(range(0, len(imgs), batch_size)):
+    for i in tqdm(range(0, len(imgs), batch_size)):
         batch_imgs = imgs[i : i + batch_size]
         with torch.no_grad():
             feats = model(images=batch_imgs)

@@ -7,7 +7,7 @@ from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, PointStruct
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 
 class Qdrant(VectorDatabase):

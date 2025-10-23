@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, PositiveInt, StringConstraints
 
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 NonEmptyStr = Annotated[str, StringConstraints(min_length=1)]
 

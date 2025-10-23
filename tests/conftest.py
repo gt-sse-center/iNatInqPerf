@@ -2,11 +2,15 @@
 
 import os
 import sys
+from functools import partialmethod
 from pathlib import Path
 
 import pytest
-import tqdm
 from loguru import logger
+from tqdm import tqdm
+
+# Disable tqdm bars in tests
+tqdm.__init__ = partialmethod(tqdm.__init__, disable=True)
 
 
 @pytest.fixture(name="source_dir")
@@ -32,19 +36,6 @@ pytest_plugins = ["fixtures.conftest"]
 # in test output but is still captured for testing.
 logger.remove()
 logger.add(sys.stderr, level="CRITICAL")
-
-
-@pytest.fixture(autouse=True)
-def notqdm(monkeypatch):
-    """
-    Replacement for tqdm that just passes back the iterable.
-    Useful to silence `tqdm` in tests.
-    """
-
-    def tqdm_replacement(iterable, *args, **kwargs):
-        return iterable
-
-    monkeypatch.setattr(tqdm, "tqdm", tqdm_replacement)
 
 
 # Keep thread counts low and avoid at-fork init issues that can trip FAISS/Torch on macOS

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 import pytest
 
 from inatinqperf.adaptors.base import VectorDatabase, DataPoint, Query, SearchResult, HuggingFaceDataset
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 
 def test_vectordb_is_abstract():

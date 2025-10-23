@@ -4,7 +4,7 @@ import docker
 import numpy as np
 import pytest
 
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.qdrant_adaptor import DataPoint, Qdrant, Query
 
 

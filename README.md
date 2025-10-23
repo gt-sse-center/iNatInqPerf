@@ -46,7 +46,7 @@ uv venv .venv && source .venv/bin/activate
 uv sync
 
 # Run an end-to-end benchmark (FAISS IVF+PQ vectordb) on the INQUIRE dataset.
-uv run python srcripts/run_benchmark.py configs/inquire_benchmark.yaml
+uv run python scripts/run_benchmark.py configs/inquire_benchmark.yaml
 ```
 
 The benchmarking code will

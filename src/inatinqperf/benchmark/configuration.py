@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BaseModel, NonNegativeInt, PositiveInt, StringConstraints
+from pydantic import BaseModel, PositiveInt, StringConstraints
 
 from inatinqperf.adaptors.enums import Metric
 
@@ -37,12 +37,12 @@ class VectorDatabaseParams(BaseModel):
 
     metric: Metric
     index_type: NonEmptyStr
-    nlist: PositiveInt | None = None
-    m: NonNegativeInt | None = None
-    nbits: PositiveInt | None = None
-    nprobe: PositiveInt | None = None
-    ef: PositiveInt = 32
-    batch_size: PositiveInt
+    nlist: int | None = None
+    m: int | None = None
+    nbits: int | None = None
+    nprobe: int | None = None
+    ef: int = 32
+    batch_size: int
 
     def to_dict(self) -> dict[str, Any]:
         """Return parameters, including extra fields, omitting unset values."""
@@ -63,11 +63,20 @@ class SearchParams(BaseModel):
     queries_file: Path
 
 
+class ContainerConfig(BaseModel):
+    """Configuration for setting up a docker container of the vector database."""
+
+    image: NonEmptyStr
+    ports: dict[str, str]
+    healthcheck: NonEmptyStr
+
+
 class Config(BaseModel):
     """Class encapsulating benchmark configuration with data validation."""
 
     dataset: DatasetConfig
     embedding: EmbeddingParams
+    container: ContainerConfig | None = None
     vectordb: VectorDatabaseConfig
     search: SearchParams
     update: dict[str, PositiveInt]

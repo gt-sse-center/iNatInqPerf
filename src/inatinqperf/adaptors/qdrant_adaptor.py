@@ -2,7 +2,6 @@
 
 from collections.abc import Generator, Sequence
 from itertools import islice
-from typing import Any
 
 from loguru import logger
 from qdrant_client import QdrantClient, models
@@ -85,7 +84,7 @@ class Qdrant(VectorDatabase):
             logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
 
     @staticmethod
-    def _batched(iterable: HuggingFaceDataset, n: int) -> Generator[Any]:
+    def _batched(iterable: HuggingFaceDataset, n: int) -> Generator[object]:
         iterator = iter(iterable)
         while batch := list(islice(iterator, n)):
             yield batch

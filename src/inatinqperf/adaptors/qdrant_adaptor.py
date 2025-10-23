@@ -1,12 +1,14 @@
 """Qdrant vector database adaptor."""
 
 from collections.abc import Generator, Sequence
+from itertools import islice
+from typing import Any
 
 from loguru import logger
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, PointStruct
 
-from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
 
 
@@ -20,19 +22,24 @@ class Qdrant(VectorDatabase):
 
     def __init__(
         self,
-        dim: int,
+        dataset: HuggingFaceDataset,
         metric: Metric,
+        dim: int,
         url: str,
         collection_name: str,
         m: int = 32,
-        ef_construct: int = 128,
+        ef: int = 128,
+        batch_size: int = 1000,
         **params,  # noqa: ARG002
     ) -> None:
+        super().__init__(dataset=dataset, metric=metric)
+
         self.client = QdrantClient(url=url)
         self.collection_name = collection_name
         self.metric = metric
         self.m = m
-        self.ef_construct = ef_construct
+        # The ef value used during collection construction
+        self.ef = ef
 
         if self.client.collection_exists(collection_name=collection_name):
             logger.info("Deleted existing collection")
@@ -49,12 +56,39 @@ class Qdrant(VectorDatabase):
                     distance=self._translate_metric(metric),
                     hnsw_config=models.HnswConfigDiff(
                         m=m,
-                        ef_construct=ef_construct,
+                        ef_construct=ef,
                         max_indexing_threads=0,
                         on_disk=False,
                     ),
                 ),
+                shard_number=2,  # reasonable default as per qdrant docs
             )
+
+            # Batch insert dataset
+            for batch in self._batched(dataset, batch_size):
+                ids = [point.pop("id") for point in batch]
+                vectors = [point.pop("embedding") for point in batch]
+
+                self.client.upsert(
+                    collection_name=collection_name,
+                    points=models.Batch(
+                        ids=ids,
+                        vectors=vectors,
+                        payloads=batch,
+                    ),
+                )
+
+            num_points_in_db = self.client.count(
+                collection_name=collection_name,
+                exact=True,
+            ).count
+            logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
+
+    @staticmethod
+    def _batched(iterable: HuggingFaceDataset, n: int) -> Generator[Any]:
+        iterator = iter(iterable)
+        while batch := list(islice(iterator, n)):
+            yield batch
 
     @staticmethod
     def _translate_metric(metric: Metric) -> Distance:
@@ -120,5 +154,5 @@ class Qdrant(VectorDatabase):
         return {
             "metric": self.metric.value,
             "m": self.m,
-            "ef_construct": self.ef_construct,
+            "ef_construct": self.ef,
         }

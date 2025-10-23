@@ -24,9 +24,9 @@ class Qdrant(VectorDatabase):
         self,
         dataset: HuggingFaceDataset,
         metric: Metric,
-        dim: int,
-        url: str,
         collection_name: str,
+        url: str,
+        port: str = "6333",
         m: int = 32,
         ef: int = 128,
         batch_size: int = 1000,
@@ -34,7 +34,7 @@ class Qdrant(VectorDatabase):
     ) -> None:
         super().__init__(dataset=dataset, metric=metric)
 
-        self.client = QdrantClient(url=url)
+        self.client = QdrantClient(url=url, port=port)
         self.collection_name = collection_name
         self.metric = metric
         self.m = m
@@ -52,7 +52,7 @@ class Qdrant(VectorDatabase):
             self.client.create_collection(
                 collection_name=collection_name,
                 vectors_config=models.VectorParams(
-                    size=dim,
+                    size=self.dim,
                     distance=self._translate_metric(metric),
                     hnsw_config=models.HnswConfigDiff(
                         m=m,

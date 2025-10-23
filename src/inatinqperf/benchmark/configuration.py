@@ -1,5 +1,6 @@
 """Modules with classes for loading configurations with Pydantic validation."""
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -42,7 +43,7 @@ class VectorDatabaseParams(BaseModel):
     nbits: int | None = None
     nprobe: int | None = None
     ef: int = 32
-    batch_size: int
+    batch_size: int = 1000
 
     def to_dict(self) -> dict[str, Any]:
         """Return parameters, including extra fields, omitting unset values."""
@@ -76,7 +77,7 @@ class Config(BaseModel):
 
     dataset: DatasetConfig
     embedding: EmbeddingParams
-    containers: list[ContainerConfig] | None = None
+    containers: Sequence[ContainerConfig] | None = None
     vectordb: VectorDatabaseConfig
     search: SearchParams
     update: dict[str, PositiveInt]

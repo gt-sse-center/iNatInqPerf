@@ -10,7 +10,7 @@ embedding:
   directory: data/inquire_benchmark/emb
 
 containers:
-  - image: "test/test"
+  - image: "qdrant/qdrant"
     ports:
       "4000": "4000"
     healthcheck: "healthcheck test"

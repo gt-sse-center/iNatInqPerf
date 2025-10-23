@@ -149,8 +149,6 @@ class Milvus(VectorDatabase):
 
         search_results = []
 
-        logger.info(f"Results: {results}")
-
         for result in results:
             hit_ids = result.ids
             hit_distances = result.distances

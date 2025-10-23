@@ -17,6 +17,13 @@ def container_fixture():
         ports={"6333": "6333"},
         remove=True,
         detach=True,  # enabled so we don't block on this
+        healthcheck={
+            "test": "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1",
+            "interval": 30 * 10**9,
+            "timeout": 20 * 10**9,
+            "start_period": 30 * 10**9,
+            "retries": 3,
+        },
     )
 
     # Wait until container is running

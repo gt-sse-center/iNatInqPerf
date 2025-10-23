@@ -1,9 +1,11 @@
 """Vector database-agnostic benchmark orchestrator."""
 
 import time
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
+import docker
 import numpy as np
 import yaml
 from datasets import Dataset
@@ -22,6 +24,41 @@ from inatinqperf.utils.embed import (
     embed_text,
     to_huggingface_dataset,
 )
+
+
+@contextmanager
+def container_context(config: Config) -> Generator[object]:
+    """Context manager for running the vector database container."""
+    containers = []
+
+    if hasattr(config, "containers"):
+        client = docker.from_env()
+        for container_cfg in config.containers:
+            container = client.containers.run(
+                container_cfg.image,
+                ports=container_cfg.ports,
+                remove=True,
+                detach=True,  # enabled so we don't block on this
+                healthcheck={
+                    "test": container_cfg.healthcheck,
+                    "interval": 30 * 10**9,
+                    "timeout": 20 * 10**9,
+                    "start_period": 30 * 10**9,
+                    "retries": 3,
+                },
+            )
+            containers.append(container)
+            logger.info(f"Running container with image: {container_cfg.image}")
+    else:
+        logger.info("No container configuration provided, not running container")
+
+    try:
+        yield containers
+
+    finally:
+        # Stop containers in reverse order
+        for container in containers[::-1]:
+            container.stop()
 
 
 class Benchmarker:
@@ -236,14 +273,15 @@ class Benchmarker:
         # Build baseline vector database
         baseline_vectordb = self.build_baseline(dataset)
 
-        # Build specified vector database
-        vectordb = self.build(dataset)
+        with container_context(self.cfg):
+            # Build specified vector database
+            vectordb = self.build(dataset)
 
-        # Perform search
-        self.search(dataset, vectordb, baseline_vectordb)
+            # Perform search
+            self.search(dataset, vectordb, baseline_vectordb)
 
-        # Update operations
-        self.update(dataset, vectordb)
+            # Update operations
+            self.update(dataset, vectordb)
 
 
 def ensure_dir(p: Path) -> Path:

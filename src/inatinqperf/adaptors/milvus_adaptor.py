@@ -40,10 +40,11 @@ class Milvus(VectorDatabase):
         metric: Metric,
         index_type: MilvusIndexType,
         index_params: dict | None = None,
-        host: str = "localhost",
+        url: str = "localhost",
         port: str = "19530",
         collection_name: str = "default_collection",
         batch_size: int = 1000,
+        **params,  # noqa: ARG002
     ) -> None:
         super().__init__(dataset, metric)
 
@@ -52,13 +53,13 @@ class Milvus(VectorDatabase):
         self.collection_name = collection_name
 
         try:
-            connections.connect(host=host, port=port)
+            connections.connect(host=url, port=port)
             server_type = utility.get_server_type()
             logger.info(f"Milvus server is running. Server type: {server_type}")
         except Exception:
             logger.exception("Milvus server is not running or connection failed")
 
-        self.client = MilvusClient(uri=f"http://{host}:{port}")
+        self.client = MilvusClient(uri=f"http://{url}:{port}")
         self.metric = self._translate_metric(metric)
 
         # Remove collection if it already exists

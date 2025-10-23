@@ -169,7 +169,14 @@ def test_build(config_yaml, data_path, mocked_benchmark_module):
 
     benchmarker = Benchmarker(config_yaml)
 
-    params = {"metric": Metric.INNER_PRODUCT, "nlist": 123, "m": 16, "index_type": "IVFPQ"}
+    params = {
+        "url": "localhost",
+        "port": "8000",
+        "metric": Metric.INNER_PRODUCT,
+        "nlist": 123,
+        "m": 16,
+        "index_type": "IVFPQ",
+    }
     benchmarker.cfg.vectordb.params = VectorDatabaseParams(**params)
 
     vdb = benchmarker.build(dataset)

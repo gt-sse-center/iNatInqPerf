@@ -12,8 +12,12 @@ embedding:
 vectordb:
   type: milvus
   params:
-    metric: l2
+    url: localhost
+    port: "19530"
+    collection_name: benchmark
     index_type: IVF_FLAT
+    metric: l2
+    batch_size: 1000
 
 search:
   topk: 10

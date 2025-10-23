@@ -9,11 +9,11 @@ embedding:
   batch_size: 64
   directory: data/inquire_benchmark/emb
 
-container:
-  image: "qdrant/qdrant:latest"
-  ports:
-    "6333": "6333"
-  healthcheck: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
+containers:
+  - image: "qdrant/qdrant:latest"
+    ports:
+      "6333": "6333"
+    healthcheck: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
 
 vectordb:
   type: qdrant.hnsw

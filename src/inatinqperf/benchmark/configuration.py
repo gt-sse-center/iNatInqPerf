@@ -76,7 +76,7 @@ class Config(BaseModel):
 
     dataset: DatasetConfig
     embedding: EmbeddingParams
-    container: ContainerConfig | None = None
+    containers: list[ContainerConfig] | None = None
     vectordb: VectorDatabaseConfig
     search: SearchParams
     update: dict[str, PositiveInt]

@@ -29,31 +29,35 @@ from inatinqperf.utils.embed import (
 @contextmanager
 def container_context(config: Config) -> Generator[object]:
     """Context manager for running the vector database container."""
-    if hasattr(config, "container"):
+    containers = []
+
+    if hasattr(config, "containers"):
         client = docker.from_env()
-        container = client.containers.run(
-            config.container.image,
-            ports=config.container.ports,
-            remove=True,
-            detach=True,  # enabled so we don't block on this
-            healthcheck={
-                "test": config.container.healthcheck,
-                "interval": 30 * 10**9,
-                "timeout": 20 * 10**9,
-                "start_period": 30 * 10**9,
-                "retries": 3,
-            },
-        )
-        logger.info(f"Running container with image: {config.image}")
+        for container_cfg in config.containers:
+            container = client.containers.run(
+                container_cfg.image,
+                ports=container_cfg.ports,
+                remove=True,
+                detach=True,  # enabled so we don't block on this
+                healthcheck={
+                    "test": container_cfg.healthcheck,
+                    "interval": 30 * 10**9,
+                    "timeout": 20 * 10**9,
+                    "start_period": 30 * 10**9,
+                    "retries": 3,
+                },
+            )
+            containers.append(container)
+            logger.info(f"Running container with image: {container_cfg.image}")
     else:
-        container = None
         logger.info("No container configuration provided, not running container")
 
     try:
-        yield container
+        yield containers
 
     finally:
-        if container:
+        # Stop containers in reverse order
+        for container in containers[::-1]:
             container.stop()
 
 

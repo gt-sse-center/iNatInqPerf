@@ -9,11 +9,11 @@ embedding:
   batch_size: 64
   directory: data/inquire_benchmark/emb
 
-container:
-  image: "test/test"
-  ports:
-    "4000": "4000"
-  healthcheck: "test"
+containers:
+  - image: "test/test"
+    ports:
+      "4000": "4000"
+    healthcheck: "healthcheck test"
 
 vectordb:
   type: faiss

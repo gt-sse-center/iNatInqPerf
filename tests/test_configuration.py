@@ -7,6 +7,7 @@ from inatinqperf.benchmark.configuration import (
     SearchParams,
     VectorDatabaseConfig,
     VectorDatabaseParams,
+    ContainerConfig,
 )
 
 
@@ -47,10 +48,19 @@ def test_search_params(benchmark_yaml):
     assert params.queries_file == Path("benchmark/queries.txt")
 
 
+def test_container_config_list(benchmark_yaml):
+    containers = [ContainerConfig[cc] for cc in benchmark_yaml["containers"]]
+    assert len(containers) == 1
+    assert containers[0].image == "test/test"
+    assert len(containers[0].ports) == 1
+    assert containers[0].healthcheck == "healthcheck test"
+
+
 def test_config(benchmark_yaml):
     config = Config(**benchmark_yaml)
     assert isinstance(config.dataset, DatasetConfig)
     assert isinstance(config.embedding, EmbeddingParams)
+    assert isinstance(config.containers, list[ContainerConfig])
     assert isinstance(config.vectordb, VectorDatabaseConfig)
     assert isinstance(config.search, SearchParams)
     assert isinstance(config.update, dict)

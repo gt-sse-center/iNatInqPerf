@@ -185,12 +185,7 @@ class Weaviate(VectorDatabase):
 
         logger.info(f" Finished upsert for {len(datapoints)} datapoints (class={self.collection_name})")
 
-    def search(
-        self,
-        q: Query | Sequence[float] | np.ndarray,
-        topk: int,
-        **_: object,
-    ) -> Sequence[SearchResult]:
+    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
         """Search for the ``topk`` nearest vectors using Weaviate's GraphQL API."""
         if self._client is None:
             msg = "Weaviate client not configured; cannot execute search."

@@ -1,16 +1,19 @@
 """Vector database-agnostic benchmark orchestrator."""
 
 import time
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
+import docker
 import numpy as np
-import tqdm
 import yaml
 from datasets import Dataset
 from loguru import logger
+from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS
-from inatinqperf.adaptors.base import DataPoint, Query, VectorDatabase
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils import Profiler, get_table
@@ -21,6 +24,41 @@ from inatinqperf.utils.embed import (
     embed_text,
     to_huggingface_dataset,
 )
+
+
+@contextmanager
+def container_context(config: Config) -> Generator[object]:
+    """Context manager for running the vector database container."""
+    containers = []
+
+    if hasattr(config, "containers"):
+        client = docker.from_env()
+        for container_cfg in config.containers:
+            container = client.containers.run(
+                container_cfg.image,
+                ports=container_cfg.ports,
+                remove=True,
+                detach=True,  # enabled so we don't block on this
+                healthcheck={
+                    "test": container_cfg.healthcheck,
+                    "interval": 30 * 10**9,
+                    "timeout": 20 * 10**9,
+                    "start_period": 30 * 10**9,
+                    "retries": 3,
+                },
+            )
+            containers.append(container)
+            logger.info(f"Running container with image: {container_cfg.image}")
+    else:
+        logger.info("No container configuration provided, not running container")
+
+    try:
+        yield containers
+
+    finally:
+        # Stop containers in reverse order
+        for container in containers[::-1]:
+            container.stop()
 
 
 class Benchmarker:
@@ -157,18 +195,16 @@ class Benchmarker:
         logger.info("Performing search on baseline")
         with Profiler("search-baseline-FaissFlat") as p:
             i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
-            for i in tqdm.tqdm(range(q.shape[0])):
+            for i in tqdm(range(q.shape[0])):
                 base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
-                row = np.full(topk, -1.0, dtype=float)
-                for j, result in enumerate(base_results[:topk]):
-                    row[j] = float(result.id)
-                i0[i] = row
+                padded = _ids_to_fixed_array(base_results, topk)
+                i0[i] = padded
 
         # search + profile
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
         with Profiler(f"search-{self.cfg.vectordb.type}") as p:
             latencies = []
-            for i in tqdm.tqdm(range(q.shape[0])):
+            for i in tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
                 vectordb.search(Query(q[i]), topk, **params.to_dict())
                 latencies.append((time.perf_counter() - t0) * 1000.0)
@@ -178,12 +214,10 @@ class Benchmarker:
         logger.info("recall@K (compare last retrieved to baseline per query")
         # For simplicity compute approximate on whole Q at once:
         i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
-        for i in tqdm.tqdm(range(q.shape[0])):
+        for i in tqdm(range(q.shape[0])):
             results = vectordb.search(Query(q[i]), topk, **params.to_dict())
-            row = np.full(topk, -1.0, dtype=float)
-            for j, result in enumerate(results[:topk]):
-                row[j] = float(result.id)
-            i1[i] = row
+            padded = _ids_to_fixed_array(results, topk)
+            i1[i] = padded
         rec = recall_at_k(i1, i0, topk)
 
         x = np.asarray(dataset["embedding"], dtype=np.float32)
@@ -239,14 +273,15 @@ class Benchmarker:
         # Build baseline vector database
         baseline_vectordb = self.build_baseline(dataset)
 
-        # Build specified vector database
-        vectordb = self.build(dataset)
+        with container_context(self.cfg):
+            # Build specified vector database
+            vectordb = self.build(dataset)
 
-        # Perform search
-        self.search(dataset, vectordb, baseline_vectordb)
+            # Perform search
+            self.search(dataset, vectordb, baseline_vectordb)
 
-        # Update operations
-        self.update(dataset, vectordb)
+            # Update operations
+            self.update(dataset, vectordb)
 
 
 def ensure_dir(p: Path) -> Path:
@@ -261,3 +296,15 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     for i in range(approx_i.shape[0]):
         hits += len(set(approx_i[i, :k]).intersection(set(exact_i[i, :k])))
     return hits / float(approx_i.shape[0] * k)
+
+
+def _ids_to_fixed_array(results: Sequence[SearchResult], topk: int) -> np.ndarray:
+    """Convert a list of SearchResult objects into a fixed-length array."""
+
+    arr = np.full(topk, -1.0, dtype=float)
+    if not results:
+        return arr
+
+    count = min(topk, len(results))
+    arr[:count] = [float(results[i].id) for i in range(count)]
+    return arr

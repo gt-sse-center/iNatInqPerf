@@ -1,6 +1,6 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
-  splits: "validation[0:200]"
+  splits: "validation+test"
   directory: data/inquire_benchmark/raw
   export_images: true
 
@@ -9,28 +9,19 @@ embedding:
   batch_size: 64
   directory: data/inquire_benchmark/emb
 
-containers:
-  - image: "qdrant/qdrant"
-    ports:
-      "4000": "4000"
-    healthcheck: "healthcheck test"
-
 vectordb:
-  type: faiss
+  type: milvus
   params:
     url: localhost
-    port: "8080"
-    metric: ip
-    index_type: IVFPQ
-    nlist: 32768
-    m: 64
-    nbits: 2
-    nprobe: 32
+    port: "19530"
+    collection_name: benchmark
+    index_type: IVF_FLAT
+    metric: l2
     batch_size: 1000
 
 search:
   topk: 10
-  queries_file: "benchmark/queries.txt"
+  queries_file: benchmark/queries.txt
 
 update:
   add_count: 50

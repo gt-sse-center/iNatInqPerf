@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from datasets import Dataset as HuggingFaceDataset
 
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 
 @dataclass

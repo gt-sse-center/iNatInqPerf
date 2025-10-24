@@ -13,7 +13,7 @@ from datasets import Dataset
 from docker.errors import APIError, DockerException
 
 from inatinqperf.adaptors.base import DataPoint, Query
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.weaviate_adaptor import Weaviate
 
 # Mark these as integration tests and skip if Docker is unavailable.

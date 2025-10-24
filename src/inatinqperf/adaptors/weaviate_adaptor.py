@@ -21,7 +21,7 @@ from loguru import logger
 from weaviate import Client as WeaviateClient
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.enums import Metric
 
 
 class WeaviateError(RuntimeError):
@@ -47,15 +47,14 @@ class Weaviate(VectorDatabase):
         metric: Metric,
         url: str,
         class_name: str = "collection_name",
-        class_name: str = "collection_name",
-        class_name: str = "collection_name",
         timeout: float = 10.0,
         vectorizer: str = "none",
         client: WeaviateClient | None = None,
         index_type: str | None = None,  # noqa: ARG002 - interface contract
     ) -> None:
         """Initialise the adaptor with a dataset template and connectivity details."""
-        super().__init__(dataset=dataset, metric=metric)
+        metric_enum = metric if isinstance(metric, Metric) else Metric(metric)
+        super().__init__(dataset=dataset, metric=metric_enum.value)
 
         if self.dim <= 0:
             msg = "Vector dimensionality must be positive."
@@ -66,13 +65,7 @@ class Weaviate(VectorDatabase):
         self.class_name = class_name
         self.timeout = timeout
         self.vectorizer = vectorizer
-        self._batch_size = batch_size
-        self._distance_metric = self._translate_metric(self.metric)
-        normalised_index_type = self._normalise_index_type(index_type)
-        if normalised_index_type == "unsupported":
-            logger.warning(f" Unsupported or missing index_type '{index_type}'; defaulting to 'hnsw'")
-            normalised_index_type = "hnsw"
-        self._index_type = normalised_index_type
+        self._distance_metric = self._translate_metric(metric_enum)
 
         # The official Weaviate client exposes the schema, data, and query APIs we rely on.
         self._client: WeaviateClient = client or WeaviateClient(
@@ -84,7 +77,13 @@ class Weaviate(VectorDatabase):
         self._ensure_schema_exists()
         self._ingest_dataset(dataset)
 
-        logger.info(f" init url={self.url} class={self.class_name} dim={self.dim} metric={self.metric.value}")
+        logger.info(
+            "[WeaviateAdaptor] init "
+            f"url={self.url} "
+            f"class={self.class_name} "
+            f"dim={self.dim} "
+            f"metric={self._metric.value}"
+        )
 
     # ------------------------------------------------------------------
     # VectorDatabase implementation

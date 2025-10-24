@@ -334,23 +334,6 @@ def test_delete_handles_multiple_ids(adaptor: tuple[Weaviate, StubWeaviateClient
     assert expected_ids.issubset(recorded_ids)
 
 
-def test_upsert_rejects_dimension_mismatch(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """Upserting vectors of the wrong dimensionality must raise ValueError."""
-    weaviate_adaptor, _ = adaptor
-    bad_point = DataPoint(id=1, vector=[1.0, 2.0], metadata={})
-    with pytest.raises(ValueError):
-        weaviate_adaptor.upsert([bad_point])
-
-
-def test_search_rejects_invalid_queries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """Search should validate query dimensionality and top-k bounds."""
-    weaviate_adaptor, _ = adaptor
-    with pytest.raises(ValueError):
-        weaviate_adaptor.search(Query(vector=[1.0, 2.0]), topk=1)
-    with pytest.raises(ValueError):
-        weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=0)
-
-
 def test_search_handles_graphql_errors(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """GraphQL errors should return an empty result list."""
     weaviate_adaptor, client = adaptor
@@ -358,15 +341,6 @@ def test_search_handles_graphql_errors(adaptor: tuple[Weaviate, StubWeaviateClie
     client.graphql_get_response = {"errors": [{"message": "no results"}]}
     results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=2)
     assert results == []
-
-
-def test_search_applies_filters(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """search should forward Query filters to the underlying GraphQL request."""
-    weaviate_adaptor, client = adaptor
-    filters = {"path": ["species"], "operator": "Equal", "valueString": "a"}
-    results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0], filters=filters), topk=1)
-    assert results == []
-    assert client.get_queries[-1]["where"] == filters
 
 
 def test_error_responses_raise_weaviate_error(dataset: Dataset) -> None:

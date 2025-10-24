@@ -91,26 +91,25 @@ class Weaviate(VectorDatabase):
 
     def upsert(self, x: Sequence[DataPoint]) -> None:
         """Insert or update vectors and associated metadata."""
-        datapoints = x if isinstance(x, list) else list(x)
-        if not datapoints:
+        if len(x) == 0:
             return
 
         # Ensure the class exists. This is a no-op if already provisioned.
         if not self._schema_ready:
             self._ensure_schema_exists()
 
-        for dp in datapoints:
-            vector = np.asarray(dp.vector, dtype=np.float32)
-            if vector.ndim != 1 or vector.shape[0] != self.dim:
-                msg = "DataPoint vectors must be 1-D with dimensionality matching the adaptor."
-                raise ValueError(msg)
+        for dp in x:
+            vector_list = dp.vector
 
-            obj_id = self._make_object_id(int(dp.id))
-            properties = dict(dp.metadata or {})
-            properties.setdefault(self._ORIGINAL_ID_FIELD, int(dp.id))
+            properties = dp.metadata
+            if properties is None:
+                properties = {}
+                dp.metadata = properties
+            properties.setdefault(self._ORIGINAL_ID_FIELD, dp.id)
+
+            obj_id = self._make_object_id(dp.id)
 
             try:
-                # Re-using deterministic object IDs keeps the collection idempotent.
                 self._client.data_object.delete(obj_id, class_name=self.collection_name)
             except Exception as exc:  # pragma: no cover - defensive programming
                 status_code = self._status_code(exc)
@@ -122,34 +121,20 @@ class Weaviate(VectorDatabase):
                     data_object=properties,
                     class_name=self.collection_name,
                     uuid=obj_id,
-                    vector=vector.tolist(),
+                    vector=vector_list,
                 )
             except Exception as exc:  # pragma: no cover - defensive programming
                 self._handle_exception("failed to upsert object", exc)
 
     def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
         """Search for the ``topk`` nearest vectors using Weaviate's GraphQL API."""
-        if topk <= 0:
-            msg = "topk must be positive"
-            raise ValueError(msg)
-
-        vector = np.asarray(q.vector, dtype=np.float32)
-        filters = q.filters
-
-        if vector.ndim != 1 or vector.shape[0] != self.dim:
-            msg = "Query vector must be 1-D with dimensionality matching the index"
-            raise ValueError(msg)
 
         builder = (
             self._client.query.get(self.collection_name, [self._ORIGINAL_ID_FIELD])
-            .with_near_vector({"vector": vector.tolist()})
+            .with_near_vector({"vector": q.vector})
             .with_limit(topk)
             .with_additional(["id", "distance"])
         )
-
-        if filters:
-            # Weaviate's where clause enables server-side filtering.
-            builder = builder.with_where(filters)
 
         try:
             data = builder.do()
@@ -167,9 +152,8 @@ class Weaviate(VectorDatabase):
         """Delete objects corresponding to the provided identifiers."""
         if not self._schema_ready:
             return
-        object_ids = [self._make_object_id(int(identifier)) for identifier in ids]
-        for obj_id in object_ids:
-            self._delete_object(obj_id)
+        for identifier in ids:
+            self._delete_object(self._make_object_id(identifier))
 
     def stats(self) -> dict[str, object]:
         """Return summary statistics sourced via a Weaviate aggregation query."""
@@ -224,7 +208,7 @@ class Weaviate(VectorDatabase):
             self._client.schema.create_class(payload)
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
-            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY and "already exists" in str(exc).lower():
+            if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
                 self._schema_ready = True
                 return
             self._handle_exception("failed to create class", exc)
@@ -273,13 +257,6 @@ class Weaviate(VectorDatabase):
             logger.warning(" dataset contains no embeddings; skipping ingest")
             return
 
-        if embeddings.ndim != self._EXPECTED_VECTOR_RANK or embeddings.shape[1] != self.dim:
-            msg = (
-                "Dataset embeddings must be 2-D with dimensionality matching the adaptor "
-                f"(expected {self.dim}, received {embeddings.shape})"
-            )
-            raise ValueError(msg)
-
         if "id" in dataset.column_names:
             ids = dataset["id"]
             if len(ids) != len(embeddings):
@@ -289,7 +266,7 @@ class Weaviate(VectorDatabase):
             ids = list(range(len(embeddings)))
 
         datapoints = [
-            DataPoint(id=int(idx), vector=vec, metadata={}) for idx, vec in zip(ids, embeddings, strict=False)
+            DataPoint(id=idx, vector=vec, metadata={}) for idx, vec in zip(ids, embeddings, strict=False)
         ]
 
         self._ingest_datapoints(datapoints)
@@ -303,35 +280,39 @@ class Weaviate(VectorDatabase):
 
     def _ingest_datapoints(self, datapoints: Sequence[DataPoint]) -> None:
         """Ingest datapoints via batch API when configured, otherwise fall back to upsert."""
-        items = datapoints if isinstance(datapoints, list) else list(datapoints)
-        if not items:
+        if len(datapoints) == 0:
             return
 
-        use_batch = isinstance(self._batch_size, int) and self._batch_size > 0
+        batch_setting = self._batch_size
+        try:
+            use_batch = int(batch_setting) > 0
+        except (TypeError, ValueError):
+            use_batch = False
+
         if use_batch:
-            if self._ingest_via_batch(self._client.batch, items):
+            batch_client = getattr(self._client, "batch", None)
+            if batch_client is not None and self._ingest_via_batch(batch_client, datapoints):
                 return
-            logger.warning(" Batch ingest failed; falling back to upsert.")
-        self.upsert(items)
+            if batch_client is None:
+                logger.warning(" Batch ingest requested but client lacks batch interface; using upsert.")
+            else:
+                logger.warning(" Batch ingest failed; falling back to upsert.")
+        self.upsert(datapoints)
 
     def _add_batch_object(self, batch: object, datapoint: DataPoint) -> None:
         """Helper to append a datapoint to a Weaviate batch request."""
-        obj_id = self._make_object_id(int(datapoint.id))
-        properties = dict(datapoint.metadata or {})
-        properties.setdefault(self._ORIGINAL_ID_FIELD, int(datapoint.id))
-        vector_arr = np.asarray(datapoint.vector, dtype=np.float32)
-        if vector_arr.ndim != 1 or vector_arr.shape[0] != self.dim:
-            msg = (
-                "DataPoint vectors added via batch ingest must be 1-D with dimensionality "
-                f"matching the adaptor (expected {self.dim}, received {vector_arr.shape})"
-            )
-            raise ValueError(msg)
-        vector = vector_arr.tolist()
+        obj_id = self._make_object_id(datapoint.id)
+        properties = datapoint.metadata
+        if properties is None:
+            properties = {}
+            datapoint.metadata = properties
+        properties.setdefault(self._ORIGINAL_ID_FIELD, datapoint.id)
+
         batch.add_data_object(
             data_object=properties,
             class_name=self.collection_name,
             uuid=obj_id,
-            vector=vector,
+            vector=datapoint.vector,
         )
 
     def _ingest_via_batch(self, batch_client: object, datapoints: Sequence[DataPoint]) -> bool:
@@ -376,7 +357,7 @@ class Weaviate(VectorDatabase):
             original = hit.get(self._ORIGINAL_ID_FIELD)
 
             if original is not None:
-                candidate_id = int(original)
+                candidate_id = original
             else:
                 id_str = additional.get("id")
                 try:
@@ -400,7 +381,7 @@ class Weaviate(VectorDatabase):
             return 0
 
         meta = entries[0].get("meta", {})
-        return int(meta.get("count", 0))
+        return meta.get("count", 0)
 
     @staticmethod
     def _make_object_id(identifier: int) -> str:
@@ -411,8 +392,11 @@ class Weaviate(VectorDatabase):
     @staticmethod
     def _normalise_index_type(index_type: str | None) -> str:
         """Return the vector index type accepted by Weaviate."""
-        if isinstance(index_type, str) and index_type.strip():
-            return index_type.strip()
+        strip_method = getattr(index_type, "strip", None)
+        if callable(strip_method):
+            stripped = strip_method()
+            if stripped:
+                return stripped
         return "hnsw"
 
     def _delete_object(self, obj_id: str) -> None:

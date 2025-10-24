@@ -290,13 +290,10 @@ class Weaviate(VectorDatabase):
             use_batch = False
 
         if use_batch:
-            batch_client = getattr(self._client, "batch", None)
+            batch_client = self._client.batch
             if batch_client is not None and self._ingest_via_batch(batch_client, datapoints):
                 return
-            if batch_client is None:
-                logger.warning(" Batch ingest requested but client lacks batch interface; using upsert.")
-            else:
-                logger.warning(" Batch ingest failed; falling back to upsert.")
+        logger.warning(" Batch ingest failed; falling back to upsert.")
         self.upsert(datapoints)
 
     def _add_batch_object(self, batch: object, datapoint: DataPoint) -> None:
@@ -392,11 +389,8 @@ class Weaviate(VectorDatabase):
     @staticmethod
     def _normalise_index_type(index_type: str | None) -> str:
         """Return the vector index type accepted by Weaviate."""
-        strip_method = getattr(index_type, "strip", None)
-        if callable(strip_method):
-            stripped = strip_method()
-            if stripped:
-                return stripped
+        if index_type:
+            return index_type.strip()
         return "hnsw"
 
     def _delete_object(self, obj_id: str) -> None:
@@ -404,7 +398,7 @@ class Weaviate(VectorDatabase):
         try:
             self._client.data_object.delete(obj_id, class_name=self.collection_name)
         except Exception as exc:  # pragma: no cover - defensive programming
-            status_code = self._status_code(exc)
+            status_code = exc.status_code if hasattr(exc, "status_code") else None
             if status_code not in {HTTPStatus.NOT_FOUND, HTTPStatus.UNPROCESSABLE_ENTITY}:
                 self._handle_exception("failed to delete object", exc)
 
@@ -423,8 +417,3 @@ class Weaviate(VectorDatabase):
         """Wrap raw client exceptions in a ``WeaviateError`` for consumers."""
         msg = f"{context}: {exc}"
         raise WeaviateError(msg) from exc
-
-    @staticmethod
-    def _status_code(exc: Exception) -> int | None:
-        """Return the status_code attribute when available."""
-        return getattr(exc, "status_code", None)

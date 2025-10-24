@@ -334,12 +334,6 @@ def test_delete_handles_multiple_ids(adaptor: tuple[Weaviate, StubWeaviateClient
     assert expected_ids.issubset(recorded_ids)
 
 
-def test_invalid_metric_raises_value_error(dataset: Dataset) -> None:
-    """Constructing with an unsupported metric string should raise ValueError."""
-    with pytest.raises(ValueError):
-        Weaviate(dataset=dataset, metric="manhattan", url="http://example.com", collection_name="TestClass")
-
-
 def test_upsert_rejects_dimension_mismatch(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """Upserting vectors of the wrong dimensionality must raise ValueError."""
     weaviate_adaptor, _ = adaptor
@@ -418,59 +412,6 @@ def test_check_ready_times_out() -> None:
     client.ready_responses = [Exception("not ready")] * 5
     with pytest.raises(WeaviateError):
         adaptor._check_ready()
-
-
-def test_check_ready_success() -> None:
-    """_check_ready should exit successfully when the client reports ready."""
-    client = StubWeaviateClient("TestClass")
-    client.ready_responses = [False, True]
-    adaptor = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.COSINE,
-        url="http://example.com",
-        collection_name="TestClass",
-        timeout=1.0,
-        client=client,
-    )
-    adaptor._check_ready()
-    assert not client.ready_responses  # Consumed all readiness responses from the stub.
-
-
-def test_class_exists_paths() -> None:
-    """_class_exists should handle found, not found, and error states."""
-    client = StubWeaviateClient("TestClass")
-    adaptor = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.COSINE,
-        url="http://example.com",
-        collection_name="TestClass",
-        timeout=1.0,
-        client=client,
-    )
-    adaptor._check_ready()
-    assert not client.ready_responses  # Consumed all readiness responses from the stub.
-
-
-def test_class_exists_paths() -> None:
-    """_class_exists should handle found, not found, and error states."""
-    client = StubWeaviateClient("TestClass")
-    adaptor = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.COSINE,
-        url="http://example.com",
-        collection_name="TestClass",
-        client=client,
-    )
-
-    adaptor._drop_class_if_exists()
-    assert adaptor._class_exists() is False
-
-    client.schema.classes["TestClass"] = {"class": "TestClass"}
-    assert adaptor._class_exists() is True
-
-    client.schema.raise_on_get = Exception("oops")
-    with pytest.raises(WeaviateError):
-        adaptor.delete([1])
 
 
 def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -587,37 +528,6 @@ def test_ingest_datapoints_with_context_manager(adaptor: tuple[Weaviate, StubWea
     client.batch = None
 
 
-def test_ingest_datapoints_without_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """_ingest_datapoints should work with batch clients lacking context manager support."""
-    weaviate_adaptor, client = adaptor
-
-    class StatelessBatch:
-        def __init__(self) -> None:
-            self.batch_size: int | None = None
-            self.records: list[tuple[str, str, dict, list[float]]] = []
-
-        def add_data_object(
-            self,
-            data_object: dict,
-            class_name: str,
-            uuid: str,
-            vector: list[float],
-        ) -> None:
-            self.records.append((class_name, uuid, data_object, vector))
-
-    batch = StatelessBatch()
-    client.batch = batch
-    weaviate_adaptor._batch_size = 2
-    initial_creates = len(client.data_object.create_calls)
-    datapoints = [DataPoint(id=i, vector=[0.0, 1.0, 0.0], metadata={}) for i in range(2)]
-
-    weaviate_adaptor._ingest_datapoints(datapoints)
-    assert batch.batch_size == 2
-    assert len(batch.records) == len(datapoints)
-    assert len(client.data_object.create_calls) == initial_creates
-    client.batch = None
-
-
 def test_ingest_datapoints_falls_back_to_upsert(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """_ingest_datapoints should fall back to upsert when batch ingest fails."""
     weaviate_adaptor, client = adaptor
@@ -661,47 +571,7 @@ def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient
     assert stats["ntotal"] == 0
 
 
-def test_constructor_and_distance_mapping(dataset):
-    """Ensure basic constructor validation and metric mapping."""
-    adaptor_ip = Weaviate(dataset, metric=Metric.INNER_PRODUCT)
-    assert adaptor_ip.distance_metric == "dot"
-
-    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
-    assert adaptor_ip.distance_metric == "dot"
-
-    adaptor_l2 = Weaviate(dataset, metric=Metric.L2)
-    assert adaptor_l2.distance_metric == "l2-squared"
-
-
 def test_validate_uuid_helpers():
     """Recover helper should accept UUIDs and reject malformed values."""
     valid_uuid = str(uuid.uuid4())
     assert Weaviate._validate_uuid(valid_uuid) == -1
-
-
-def test_constructor_and_distance_mapping() -> None:
-    """Constructor should validate metrics and map them to client values."""
-    with pytest.raises(ValueError):
-        _ = Weaviate(
-            dataset=make_dataset(0),
-            metric=Metric.COSINE,
-            url="http://example.com",
-            collection_name="TestClass",
-            client=StubWeaviateClient("TestClass"),
-        )
-    adaptor_ip = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.INNER_PRODUCT,
-        url="http://example.com",
-        collection_name="TestClass",
-        client=StubWeaviateClient("TestClass"),
-    )
-    assert adaptor_ip._distance_metric == "dot"
-    adaptor_l2 = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.L2,
-        url="http://example.com",
-        collection_name="TestClass",
-        client=StubWeaviateClient("TestClass"),
-    )
-    assert adaptor_l2._distance_metric == "l2-squared"

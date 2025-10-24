@@ -398,7 +398,7 @@ class Weaviate(VectorDatabase):
         try:
             self._client.data_object.delete(obj_id, class_name=self.collection_name)
         except Exception as exc:  # pragma: no cover - defensive programming
-            status_code = exc.status_code if hasattr(exc, "status_code") else None
+            status_code = self._status_code(exc)
             if status_code not in {HTTPStatus.NOT_FOUND, HTTPStatus.UNPROCESSABLE_ENTITY}:
                 self._handle_exception("failed to delete object", exc)
 
@@ -417,3 +417,8 @@ class Weaviate(VectorDatabase):
         """Wrap raw client exceptions in a ``WeaviateError`` for consumers."""
         msg = f"{context}: {exc}"
         raise WeaviateError(msg) from exc
+
+    @staticmethod
+    def _status_code(exc: Exception) -> int | None:
+        """Return the status_code attribute when available."""
+        return getattr(exc, "status_code", None)

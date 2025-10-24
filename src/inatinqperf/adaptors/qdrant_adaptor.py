@@ -44,10 +44,6 @@ class Qdrant(VectorDatabase):
             logger.info("Deleted existing collection")
             self.client.delete_collection(collection_name=collection_name)
 
-        if self.client.collection_exists(collection_name=collection_name):
-            logger.info("Deleted existing collection")
-            self.client.delete_collection(collection_name=collection_name)
-
         if not self.client.collection_exists(collection_name=collection_name):
             logger.patch(lambda r: r.update(function="constructor")).info(
                 f"Creating collection {collection_name}"

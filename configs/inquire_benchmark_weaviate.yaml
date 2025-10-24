@@ -16,7 +16,7 @@ vectordb:
     metric: cosine
     url: http://localhost:8080
     port: "8080"
-    collection_name: benchmark
+    collection_name: Benchmark
     timeout: 10.0
 
 search:

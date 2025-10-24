@@ -43,39 +43,59 @@ class Weaviate(VectorDatabase):
 
     def __init__(
         self,
-        dataset: HuggingFaceDataset,
-        metric: Metric,
-        url: str,
+        dataset: HuggingFaceDataset | None = None,
+        metric: Metric = Metric.COSINE,
+        url: str | None = None,
         class_name: str = "collection_name",
         timeout: float = 10.0,
         vectorizer: str = "none",
+        batch_size: int | None = None,
         client: WeaviateClient | None = None,
-        index_type: str | None = None,  # noqa: ARG002 - interface contract
+        index_type: str | None = None,
+        dim: int | None = None,
     ) -> None:
         """Initialise the adaptor with a dataset template and connectivity details."""
         metric_enum = metric if isinstance(metric, Metric) else Metric(metric)
-        super().__init__(dataset=dataset, metric=metric_enum.value)
 
-        if self.dim <= 0:
-            msg = "Vector dimensionality must be positive."
-            raise ValueError(msg)
+        if dataset is not None:
+            super().__init__(dataset=dataset, metric=metric_enum.value)
+            if self.dim <= 0:
+                msg = "Vector dimensionality must be positive."
+                raise ValueError(msg)
+        else:
+            if dim is None:
+                msg = "Either dataset or dim must be provided."
+                raise ValueError(msg)
+            if dim <= 0:
+                msg = "Vector dimensionality must be positive."
+                raise ValueError(msg)
+            self.metric = metric_enum
+            self.dim = int(dim)
 
         self._metric = metric_enum
-        self.url = url.rstrip("/")
+        self.url = (url or "").rstrip("/")
         self.class_name = class_name
         self.timeout = timeout
         self.vectorizer = vectorizer
+        self._batch_size = batch_size
+        self._index_type = self._normalise_index_type(index_type)
         self._distance_metric = self._translate_metric(metric_enum)
 
-        # The official Weaviate client exposes the schema, data, and query APIs we rely on.
-        self._client: WeaviateClient = client or WeaviateClient(
-            url=self.url,
-            timeout_config=(self.timeout, self.timeout),
-        )
+        if client is not None:
+            self._client: WeaviateClient | None = client
+        elif self.url:
+            self._client = WeaviateClient(
+                url=self.url,
+                timeout_config=(self.timeout, self.timeout),
+            )
+        else:
+            self._client = None
 
-        self._drop_class_if_exists()
-        self._ensure_schema_exists()
-        self._ingest_dataset(dataset)
+        if self._client is not None:
+            self._drop_class_if_exists()
+            self._ensure_schema_exists()
+            if dataset is not None:
+                self._ingest_dataset(dataset)
 
         logger.info(
             "[WeaviateAdaptor] init "
@@ -85,15 +105,19 @@ class Weaviate(VectorDatabase):
             f"metric={self._metric.value}"
         )
 
+    @property
+    def distance_metric(self) -> str:
+        """Expose the resolved distance metric for tests and diagnostics."""
+        return self._distance_metric
+
     # ------------------------------------------------------------------
     # VectorDatabase implementation
     # ------------------------------------------------------------------
-    def train_index(self, x_train: np.ndarray) -> None:  # noqa: ARG002 - interface contract
-        """Ensure that the backing Weaviate class exists."""
-        self._ensure_schema_exists()
-
     def drop_index(self) -> None:
         """Delete the managed class entirely."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot drop index."
+            raise WeaviateError(msg)
         try:
             self._client.schema.delete_class(self.class_name)
         except Exception as exc:  # pragma: no cover - defensive programming
@@ -107,6 +131,9 @@ class Weaviate(VectorDatabase):
 
     def upsert(self, x: Sequence[DataPoint]) -> None:
         """Insert or update vectors and associated metadata."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot upsert datapoints."
+            raise WeaviateError(msg)
         datapoints = list(x)
         if not datapoints:
             logger.debug(" upsert called with empty payload; skipping.")
@@ -115,7 +142,7 @@ class Weaviate(VectorDatabase):
         logger.info(f" Upserting {len(datapoints)} datapoints into class {self.class_name}")
 
         # Ensure the class exists. This is a no-op if already provisioned.
-        self.train_index(vectors)
+        self._ensure_schema_exists()
 
         for dp in datapoints:
             vector = np.asarray(dp.vector, dtype=np.float32)
@@ -155,6 +182,9 @@ class Weaviate(VectorDatabase):
         **_: object,
     ) -> Sequence[SearchResult]:
         """Search for the ``topk`` nearest vectors using Weaviate's GraphQL API."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot execute search."
+            raise WeaviateError(msg)
         if topk <= 0:
             msg = "topk must be positive"
             raise ValueError(msg)
@@ -188,31 +218,41 @@ class Weaviate(VectorDatabase):
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
                 logger.warning(f" search requested before schema exists (class={self.class_name}).")
                 return []
+            self._handle_exception("failed to execute search", exc)
 
         results = self._extract_results(data)
         return [SearchResult(id=result.id, score=result.score) for result in results[:topk]]
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete objects corresponding to the provided identifiers."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot delete datapoints."
+            raise WeaviateError(msg)
+        if not self._class_exists():
+            logger.info(f" Delete requested but class {self.class_name} absent; skipping.")
+            return
         object_ids = [self._make_object_id(int(identifier)) for identifier in ids]
         for obj_id in object_ids:
             self._delete_object(obj_id)
 
     def stats(self) -> dict[str, object]:
         """Return summary statistics sourced via a Weaviate aggregation query."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot fetch stats."
+            raise WeaviateError(msg)
+        count = 0
         try:
             data = self._client.query.aggregate(self.class_name).with_meta_count().do()
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
                 logger.warning(f" stats requested before schema exists (class={self.class_name}).")
-            else:
-                logger.error(f" Failed to fetch stats for class={self.class_name}: {exc}")
+            else:  # unexpected failure should propagate as WeaviateError
+                self._handle_exception("failed to fetch stats", exc)
         else:
             count = self._extract_count(data)
         stats = {
             "ntotal": count,
-            "metric": self.metric.value,
             "metric": self.metric.value,
             "class_name": self.class_name,
             "url": self.url,
@@ -226,6 +266,9 @@ class Weaviate(VectorDatabase):
     # ------------------------------------------------------------------
     def _check_ready(self) -> None:
         """Poll the readiness endpoint until Weaviate reports healthy."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot check readiness."
+            raise WeaviateError(msg)
         deadline = time.time() + self.timeout
         last_error: Exception | None = None
 
@@ -245,6 +288,9 @@ class Weaviate(VectorDatabase):
 
     def _class_exists(self) -> bool:
         """Return ``True`` if the target class already exists."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot probe class existence."
+            raise WeaviateError(msg)
         try:
             schema = self._client.schema.get()
         except Exception as exc:  # pragma: no cover - defensive programming
@@ -255,6 +301,9 @@ class Weaviate(VectorDatabase):
 
     def _ensure_schema_exists(self) -> None:
         """Create the Weaviate class if it does not already exist."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot ensure schema."
+            raise WeaviateError(msg)
         self._check_ready()
         if self._class_exists():
             return
@@ -273,6 +322,9 @@ class Weaviate(VectorDatabase):
 
     def _drop_class_if_exists(self) -> None:
         """Drop the target class if it already exists."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot drop existing class."
+            raise WeaviateError(msg)
         try:
             self._client.schema.delete_class(self.class_name)
         except Exception as exc:  # pragma: no cover - defensive programming
@@ -303,6 +355,9 @@ class Weaviate(VectorDatabase):
 
     def _ingest_dataset(self, dataset: HuggingFaceDataset) -> None:
         """Load existing dataset vectors into the managed Weaviate class."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot ingest dataset."
+            raise WeaviateError(msg)
 
         if "embedding" not in dataset.column_names:
             logger.warning(" dataset missing 'embedding' column; skipping ingest")
@@ -348,48 +403,31 @@ class Weaviate(VectorDatabase):
 
     def _ingest_datapoints(self, datapoints: Sequence[DataPoint]) -> None:
         """Ingest datapoints via batch API when configured, otherwise fall back to upsert."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot ingest datapoints."
+            raise WeaviateError(msg)
         items = list(datapoints)
         if not items:
             logger.debug(" _ingest_datapoints received no datapoints; skipping.")
             return
 
         use_batch = isinstance(self._batch_size, int) and self._batch_size > 0
-        batch_client = self._client.batch if hasattr(self._client, "batch") else None
+        batch_client = getattr(self._client, "batch", None)
 
         if use_batch and batch_client is not None:
             logger.info(f" Batch ingest enabled (batch_size={self._batch_size}); using batch API.")
-            batch_size = max(1, int(self._batch_size or 0))
-
-            def configure(target: object) -> None:
-                if hasattr(target, "batch_size"):
-                    target.batch_size = batch_size
-
-            def emit(target: object) -> None:
-                for dp in items:
-                    self._add_batch_object(target, dp)
-
-            try:
-                has_context = hasattr(batch_client, "__enter__") and callable(batch_client.__enter__)
-                if has_context:
-                    with batch_client as batch:
-                        configure(batch)
-                        emit(batch)
-                else:
-                    configure(batch_client)
-                    emit(batch_client)
+            if self._ingest_via_batch(batch_client, items):
                 return
-            except Exception as exc:  # pragma: no cover - defensive programming
-                logger.error(f" Batch ingest failed: {exc}")
-                logger.warning(" Batch ingest failed; falling back to upsert.")
-                self.upsert(items)
-                return
-
-        if use_batch:
+            logger.warning(" Batch ingest failed; falling back to upsert.")
+        elif use_batch:
             logger.warning(" Batch ingest requested but client lacks batch interface; using upsert.")
         self.upsert(items)
 
     def _add_batch_object(self, batch: object, datapoint: DataPoint) -> None:
         """Helper to append a datapoint to a Weaviate batch request."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot add batch object."
+            raise WeaviateError(msg)
         obj_id = self._make_object_id(int(datapoint.id))
         metadata = datapoint.metadata if hasattr(datapoint, "metadata") else None
         properties = dict(metadata or {})
@@ -414,8 +452,11 @@ class Weaviate(VectorDatabase):
             msg = "batch client missing add_data_object"
             raise TypeError(msg)
 
-    def _bulk_ingest(self, datapoints: Sequence[DataPoint], batch_client: object) -> bool:
+    def _ingest_via_batch(self, batch_client: object, datapoints: Sequence[DataPoint]) -> bool:
         """Attempt to ingest datapoints via the client's batch API."""
+        if self._client is None:
+            msg = "Weaviate client not configured; cannot perform batch ingest."
+            raise WeaviateError(msg)
         batch_size = max(1, int(self._batch_size or 0))
         try:
             # Some client versions expose the batch context manager; prefer that when available.
@@ -436,32 +477,6 @@ class Weaviate(VectorDatabase):
         except Exception as exc:  # pragma: no cover - defensive programming
             logger.error(f"[WeaviateAdaptor] Batch ingest failed: {exc}")
             return False
-
-    def _add_batch_object(self, batch: object, datapoint: DataPoint) -> None:
-        """Helper to append a datapoint to a Weaviate batch request."""
-        obj_id = self._make_object_id(int(datapoint.id))
-        metadata = datapoint.metadata if hasattr(datapoint, "metadata") else None
-        properties = dict(metadata or {})
-        properties.setdefault(self._ORIGINAL_ID_FIELD, int(datapoint.id))
-        vector_arr = np.asarray(datapoint.vector, dtype=np.float32)
-        if vector_arr.ndim != 1 or vector_arr.shape[0] != self.dim:
-            msg = (
-                "DataPoint vectors added via batch ingest must be 1-D with dimensionality "
-                f"matching the adaptor (expected {self.dim}, received {vector_arr.shape})"
-            )
-            raise ValueError(msg)
-        vector = vector_arr.tolist()
-        add = batch.add_data_object if hasattr(batch, "add_data_object") else None
-        if callable(add):
-            add(
-                data_object=properties,
-                class_name=self.class_name,
-                uuid=obj_id,
-                vector=vector,
-            )
-        else:  # pragma: no cover - defensive programming
-            msg = "batch client missing add_data_object"
-            raise TypeError(msg)
 
     @staticmethod
     def _translate_metric(metric: Metric) -> str:
@@ -529,7 +544,7 @@ class Weaviate(VectorDatabase):
         """Return the vector index type accepted by Weaviate."""
         if isinstance(index_type, str) and index_type.strip():
             return index_type.strip()
-        return "unsupported"
+        return "hnsw"
 
     def _delete_object(self, obj_id: str) -> None:
         """Delete a single object, tolerating 404 responses."""

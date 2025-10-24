@@ -186,6 +186,7 @@ class StubWeaviateClient:
         self.schema = StubSchema(self)
         self.data_object = StubDataObject()
         self.query = StubQuery(self)
+        self.batch: object | None = None
         self.get_queries: list[dict] = []
         self.aggregate_queries: list[dict] = []
         self.graphql_get_response: dict = {"data": {"Get": {class_name: []}}}
@@ -264,7 +265,8 @@ def test_ensure_schema_exists_tolerates_already_exists_error(dataset: Dataset) -
     )
     adaptor._ensure_schema_exists()
     assert client.schema.create_calls
-    
+
+
 def test_upsert_and_search_with_stub(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """Upserting data points should make them retrievable via search."""
     weaviate_adaptor, client = adaptor
@@ -468,7 +470,7 @@ def test_class_exists_paths() -> None:
 
     client.schema.raise_on_get = Exception("oops")
     with pytest.raises(WeaviateError):
-        weaviate_adaptor.delete([1])
+        adaptor.delete([1])
 
 
 def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -489,8 +491,8 @@ def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeavi
     assert results[0].id == -1
 
 
-def test_train_index_raises_on_failed_creation(dataset: Dataset) -> None:
-    """train_index must surface exceptions raised by schema creation."""
+def test_schema_creation_raises_on_failure(dataset: Dataset) -> None:
+    """Schema provisioning errors should propagate as WeaviateError."""
     client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = Exception("cannot create")
     with pytest.raises(WeaviateError):
@@ -547,12 +549,10 @@ def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeavi
     assert np.isfinite(results[0].score)
     assert results[0].id == -1
 
-        def add_data_object(self, *_, **__) -> None:
-            raise RuntimeError("boom")
 
-def test_bulk_ingest_with_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """_bulk_ingest should honour batch context managers and ingest all datapoints."""
-    weaviate_adaptor, _ = adaptor
+def test_ingest_datapoints_with_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_ingest_datapoints should honour batch context managers."""
+    weaviate_adaptor, client = adaptor
 
     class RecordingBatch:
         def __init__(self) -> None:
@@ -575,18 +575,21 @@ def test_bulk_ingest_with_context_manager(adaptor: tuple[Weaviate, StubWeaviateC
             self.records.append((class_name, uuid, data_object, vector))
 
     batch = RecordingBatch()
+    client.batch = batch
     weaviate_adaptor._batch_size = 4
+    initial_creates = len(client.data_object.create_calls)
     datapoints = [DataPoint(id=i, vector=[1.0, 0.0, 0.0], metadata={}) for i in range(3)]
 
-    result = weaviate_adaptor._bulk_ingest(datapoints, batch)
-    assert result is True
+    weaviate_adaptor._ingest_datapoints(datapoints)
     assert batch.batch_size == 4
     assert len(batch.records) == len(datapoints)
+    assert len(client.data_object.create_calls) == initial_creates
+    client.batch = None
 
 
-def test_bulk_ingest_without_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """_bulk_ingest should work with batch clients lacking context manager support."""
-    weaviate_adaptor, _ = adaptor
+def test_ingest_datapoints_without_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_ingest_datapoints should work with batch clients lacking context manager support."""
+    weaviate_adaptor, client = adaptor
 
     class StatelessBatch:
         def __init__(self) -> None:
@@ -603,13 +606,44 @@ def test_bulk_ingest_without_context_manager(adaptor: tuple[Weaviate, StubWeavia
             self.records.append((class_name, uuid, data_object, vector))
 
     batch = StatelessBatch()
+    client.batch = batch
     weaviate_adaptor._batch_size = 2
+    initial_creates = len(client.data_object.create_calls)
     datapoints = [DataPoint(id=i, vector=[0.0, 1.0, 0.0], metadata={}) for i in range(2)]
 
-    result = weaviate_adaptor._bulk_ingest(datapoints, batch)
-    assert result is True
+    weaviate_adaptor._ingest_datapoints(datapoints)
     assert batch.batch_size == 2
     assert len(batch.records) == len(datapoints)
+    assert len(client.data_object.create_calls) == initial_creates
+    client.batch = None
+
+
+def test_ingest_datapoints_falls_back_to_upsert(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_ingest_datapoints should fall back to upsert when batch ingest fails."""
+    weaviate_adaptor, client = adaptor
+
+    class ExplodingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            raise RuntimeError("boom")
+
+    client.batch = ExplodingBatch()
+    weaviate_adaptor._batch_size = 5
+    datapoints = [DataPoint(id=i, vector=[0.0, 0.0, 1.0], metadata={}) for i in range(3)]
+
+    initial_creates = len(client.data_object.create_calls)
+    weaviate_adaptor._ingest_datapoints(datapoints)
+    assert len(client.data_object.create_calls) - initial_creates == len(datapoints)
+    client.batch = None
+
 
 def test_stats_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """stats should raise when the aggregate query surfaces an error."""
@@ -625,29 +659,6 @@ def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient
     client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.class_name: []}}}
     stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 0
-
-
-def test_bulk_ingest_handles_exceptions(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """_bulk_ingest should return False and avoid raising when ingestion fails."""
-    weaviate_adaptor, _ = adaptor
-
-    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
-    assert adaptor_ip.distance_metric == "dot"
-
-    adaptor_l2 = Weaviate(dataset, metric=Metric.L2)
-    assert adaptor_l2.distance_metric == "l2-squared"
-
-        def __enter__(self) -> "ExplodingBatch":
-            return self
-
-        def __exit__(self, exc_type, exc, traceback) -> bool:
-            return False
-
-    weaviate_adaptor._batch_size = 5
-    datapoints = [DataPoint(id=i, vector=[0.0, 0.0, 1.0], metadata={}) for i in range(3)]
-
-    result = weaviate_adaptor._bulk_ingest(datapoints, batch)
-    assert result is False
 
 
 def test_constructor_and_distance_mapping(dataset):

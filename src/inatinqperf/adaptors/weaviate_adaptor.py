@@ -50,7 +50,6 @@ class Weaviate(VectorDatabase):
         *,
         timeout: float = 10.0,
         vectorizer: str = "none",
-        batch_size: int | None = None,
         client: WeaviateClient | None = None,
         dim: int | None = None,
         **options: object,
@@ -96,8 +95,6 @@ class Weaviate(VectorDatabase):
         self._batch_size = options.pop("batch_size", None)
         self._index_type = self._normalise_index_type(options.pop("index_type", None))
         self._distance_metric = self._translate_metric(metric_enum)
-        if options:
-            logger.debug(f" Ignoring unused weaviate options: {sorted(options.keys())}")
 
         if client is not None:
             self._client: WeaviateClient | None = client

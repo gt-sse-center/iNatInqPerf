@@ -15,7 +15,8 @@ vectordb:
     index_type: hnsw
     metric: cosine
     url: http://localhost:8080
-    class_name: benchmark
+    port: "8080"
+    collection_name: benchmark
     timeout: 10.0
 
 search:

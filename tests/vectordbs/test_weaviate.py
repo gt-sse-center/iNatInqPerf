@@ -380,7 +380,7 @@ def test_weaviate_live_single_vector(tmp_path, base_url: str) -> None:
             params=VectorDatabaseParams(
                 metric=Metric.COSINE,
                 url=base_url,
-                class_name="BenchmarkLiveTest",
+                collection_name="BenchmarkLiveTest",
                 timeout=10.0,
             ),
         ),
@@ -431,7 +431,7 @@ def live_adaptor(live_class_name: str, live_dataset: Dataset, base_url: str) -> 
         dataset=live_dataset,
         metric=Metric.COSINE,
         url=base_url,
-        class_name=live_class_name,
+        collection_name=live_class_name,
         batch_size=3,
         timeout=10.0,
     )
@@ -449,7 +449,7 @@ def test_weaviate_live_initial_stats(live_adaptor: tuple[Weaviate, Dataset]) -> 
     adaptor, dataset = live_adaptor
     stats = adaptor.stats()
     assert stats["ntotal"] == len(dataset)
-    assert stats["class_name"] == adaptor.class_name
+    assert stats["class_name"] == adaptor.collection_name
     assert stats["metric"] == adaptor.metric.value
 
 

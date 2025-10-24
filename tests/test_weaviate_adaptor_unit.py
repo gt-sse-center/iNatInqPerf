@@ -232,7 +232,7 @@ def adaptor_fixture(dataset: Dataset, stub_client: StubWeaviateClient) -> tuple[
         dataset=dataset,
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=stub_client,
     )
     return adaptor, stub_client
@@ -245,7 +245,7 @@ def test_ensure_schema_exists_creates_class(dataset: Dataset) -> None:
         dataset=dataset,
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=client,
     )
     adaptor._ensure_schema_exists()
@@ -260,7 +260,7 @@ def test_ensure_schema_exists_tolerates_already_exists_error(dataset: Dataset) -
         dataset=dataset,
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=client,
     )
     adaptor._ensure_schema_exists()
@@ -283,7 +283,7 @@ def test_upsert_and_search_with_stub(adaptor: tuple[Weaviate, StubWeaviateClient
     client.graphql_get_response = {
         "data": {
             "Get": {
-                weaviate_adaptor.class_name: [
+                weaviate_adaptor.collection_name: [
                     {
                         "originalId": 2,
                         "_additional": {"id": "00000000-0000-0000-0000-000000000002", "distance": 0.1},
@@ -307,11 +307,11 @@ def test_stats_returns_count(adaptor: tuple[Weaviate, StubWeaviateClient]) -> No
     """stats should surface the meta count from the aggregate response."""
     weaviate_adaptor, client = adaptor
     client.graphql_aggregate_response = {
-        "data": {"Aggregate": {weaviate_adaptor.class_name: [{"meta": {"count": 5}}]}}
+        "data": {"Aggregate": {weaviate_adaptor.collection_name: [{"meta": {"count": 5}}]}}
     }
     stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 5
-    assert stats["class_name"] == weaviate_adaptor.class_name
+    assert stats["class_name"] == weaviate_adaptor.collection_name
 
 
 def test_stats_handles_graphql_error(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -337,7 +337,7 @@ def test_delete_handles_multiple_ids(adaptor: tuple[Weaviate, StubWeaviateClient
 def test_invalid_metric_raises_value_error(dataset: Dataset) -> None:
     """Constructing with an unsupported metric string should raise ValueError."""
     with pytest.raises(ValueError):
-        Weaviate(dataset=dataset, metric="manhattan", url="http://example.com", class_name="TestClass")
+        Weaviate(dataset=dataset, metric="manhattan", url="http://example.com", collection_name="TestClass")
 
 
 def test_upsert_rejects_dimension_mismatch(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -384,7 +384,7 @@ def test_error_responses_raise_weaviate_error(dataset: Dataset) -> None:
             dataset=dataset,
             metric=Metric.COSINE,
             url="http://example.com",
-            class_name="TestClass",
+            collection_name="TestClass",
             client=client,
         )
 
@@ -411,7 +411,7 @@ def test_check_ready_times_out() -> None:
         dataset=make_dataset(2),
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         timeout=0.2,
         client=client,
     )
@@ -428,7 +428,7 @@ def test_check_ready_success() -> None:
         dataset=make_dataset(2),
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         timeout=1.0,
         client=client,
     )
@@ -443,7 +443,7 @@ def test_class_exists_paths() -> None:
         dataset=make_dataset(2),
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         timeout=1.0,
         client=client,
     )
@@ -458,7 +458,7 @@ def test_class_exists_paths() -> None:
         dataset=make_dataset(2),
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=client,
     )
 
@@ -480,7 +480,7 @@ def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeavi
     client.graphql_get_response = {
         "data": {
             "Get": {
-                weaviate_adaptor.class_name: [
+                weaviate_adaptor.collection_name: [
                     {"_additional": {"id": "not-a-uuid", "distance": 0.2}},
                 ]
             }
@@ -500,7 +500,7 @@ def test_schema_creation_raises_on_failure(dataset: Dataset) -> None:
             dataset=dataset,
             metric=Metric.COSINE,
             url="http://example.com",
-            class_name="TestClass",
+            collection_name="TestClass",
             client=client,
         )
 
@@ -539,7 +539,7 @@ def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeavi
     client.graphql_get_response = {
         "data": {
             "Get": {
-                weaviate_adaptor.class_name: [
+                weaviate_adaptor.collection_name: [
                     {"_additional": {"id": "not-a-uuid", "distance": 0.2}},
                 ]
             }
@@ -656,7 +656,7 @@ def test_stats_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]
 def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """stats should return zero when the aggregate result is empty."""
     weaviate_adaptor, client = adaptor
-    client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.class_name: []}}}
+    client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.collection_name: []}}}
     stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 0
 
@@ -686,14 +686,14 @@ def test_constructor_and_distance_mapping() -> None:
             dataset=make_dataset(0),
             metric=Metric.COSINE,
             url="http://example.com",
-            class_name="TestClass",
+            collection_name="TestClass",
             client=StubWeaviateClient("TestClass"),
         )
     adaptor_ip = Weaviate(
         dataset=make_dataset(2),
         metric=Metric.INNER_PRODUCT,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=StubWeaviateClient("TestClass"),
     )
     assert adaptor_ip._distance_metric == "dot"
@@ -701,7 +701,7 @@ def test_constructor_and_distance_mapping() -> None:
         dataset=make_dataset(2),
         metric=Metric.L2,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=StubWeaviateClient("TestClass"),
     )
     assert adaptor_l2._distance_metric == "l2-squared"

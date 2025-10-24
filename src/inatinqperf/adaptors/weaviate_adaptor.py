@@ -45,14 +45,15 @@ class Weaviate(VectorDatabase):
         self,
         dataset: HuggingFaceDataset | None = None,
         metric: Metric = Metric.COSINE,
-        url: str | None = None,
-        class_name: str = "collection_name",
+        url: str | None = "http://localhost",
+        collection_name: str = "collection_name",
+        *,
         timeout: float = 10.0,
         vectorizer: str = "none",
         batch_size: int | None = None,
         client: WeaviateClient | None = None,
-        index_type: str | None = None,
         dim: int | None = None,
+        **options: object,
     ) -> None:
         """Initialise the adaptor with a dataset template and connectivity details."""
         metric_enum = metric if isinstance(metric, Metric) else Metric(metric)
@@ -72,14 +73,31 @@ class Weaviate(VectorDatabase):
             self.metric = metric_enum
             self.dim = int(dim)
 
+        if dataset is not None:
+            super().__init__(dataset=dataset, metric=metric_enum.value)
+            if self.dim <= 0:
+                msg = "Vector dimensionality must be positive."
+                raise ValueError(msg)
+        else:
+            if dim is None:
+                msg = "Either dataset or dim must be provided."
+                raise ValueError(msg)
+            if dim <= 0:
+                msg = "Vector dimensionality must be positive."
+                raise ValueError(msg)
+            self.metric = metric_enum
+            self.dim = int(dim)
+
         self._metric = metric_enum
         self.url = (url or "").rstrip("/")
-        self.class_name = class_name
+        self.collection_name = collection_name
         self.timeout = timeout
         self.vectorizer = vectorizer
-        self._batch_size = batch_size
-        self._index_type = self._normalise_index_type(index_type)
+        self._batch_size = options.pop("batch_size", None)
+        self._index_type = self._normalise_index_type(options.pop("index_type", None))
         self._distance_metric = self._translate_metric(metric_enum)
+        if options:
+            logger.debug(f" Ignoring unused weaviate options: {sorted(options.keys())}")
 
         if client is not None:
             self._client: WeaviateClient | None = client
@@ -100,15 +118,10 @@ class Weaviate(VectorDatabase):
         logger.info(
             "[WeaviateAdaptor] init "
             f"url={self.url} "
-            f"class={self.class_name} "
+            f"class={self.collection_name} "
             f"dim={self.dim} "
             f"metric={self._metric.value}"
         )
-
-    @property
-    def distance_metric(self) -> str:
-        """Expose the resolved distance metric for tests and diagnostics."""
-        return self._distance_metric
 
     # ------------------------------------------------------------------
     # VectorDatabase implementation
@@ -119,15 +132,15 @@ class Weaviate(VectorDatabase):
             msg = "Weaviate client not configured; cannot drop index."
             raise WeaviateError(msg)
         try:
-            self._client.schema.delete_class(self.class_name)
+            self._client.schema.delete_class(self.collection_name)
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code == HTTPStatus.NOT_FOUND:
-                logger.info(f" Class {self.class_name} already absent.")
+                logger.info(f" Class {self.collection_name} already absent.")
                 return
             self._handle_exception("failed to delete class", exc)
 
-        logger.info(f" Dropped class={self.class_name}")
+        logger.info(f" Dropped class={self.collection_name}")
 
     def upsert(self, x: Sequence[DataPoint]) -> None:
         """Insert or update vectors and associated metadata."""
@@ -139,7 +152,7 @@ class Weaviate(VectorDatabase):
             logger.debug(" upsert called with empty payload; skipping.")
             return
 
-        logger.info(f" Upserting {len(datapoints)} datapoints into class {self.class_name}")
+        logger.info(f" Upserting {len(datapoints)} datapoints into class {self.collection_name}")
 
         # Ensure the class exists. This is a no-op if already provisioned.
         self._ensure_schema_exists()
@@ -157,7 +170,7 @@ class Weaviate(VectorDatabase):
 
             try:
                 # Re-using deterministic object IDs keeps the collection idempotent.
-                self._client.data_object.delete(obj_id, class_name=self.class_name)
+                self._client.data_object.delete(obj_id, class_name=self.collection_name)
             except Exception as exc:  # pragma: no cover - defensive programming
                 status_code = self._status_code(exc)
                 if status_code != HTTPStatus.NOT_FOUND:
@@ -166,14 +179,14 @@ class Weaviate(VectorDatabase):
             try:
                 self._client.data_object.create(
                     data_object=properties,
-                    class_name=self.class_name,
+                    class_name=self.collection_name,
                     uuid=obj_id,
                     vector=vector.tolist(),
                 )
             except Exception as exc:  # pragma: no cover - defensive programming
                 self._handle_exception("failed to upsert object", exc)
 
-        logger.info(f" Finished upsert for {len(datapoints)} datapoints (class={self.class_name})")
+        logger.info(f" Finished upsert for {len(datapoints)} datapoints (class={self.collection_name})")
 
     def search(
         self,
@@ -201,7 +214,7 @@ class Weaviate(VectorDatabase):
             raise ValueError(msg)
 
         builder = (
-            self._client.query.get(self.class_name, [self._ORIGINAL_ID_FIELD])
+            self._client.query.get(self.collection_name, [self._ORIGINAL_ID_FIELD])
             .with_near_vector({"vector": vector.tolist()})
             .with_limit(topk)
             .with_additional(["id", "distance"])
@@ -216,7 +229,7 @@ class Weaviate(VectorDatabase):
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
-                logger.warning(f" search requested before schema exists (class={self.class_name}).")
+                logger.warning(f" search requested before schema exists (class={self.collection_name}).")
                 return []
             self._handle_exception("failed to execute search", exc)
 
@@ -229,7 +242,7 @@ class Weaviate(VectorDatabase):
             msg = "Weaviate client not configured; cannot delete datapoints."
             raise WeaviateError(msg)
         if not self._class_exists():
-            logger.info(f" Delete requested but class {self.class_name} absent; skipping.")
+            logger.info(f" Delete requested but class {self.collection_name} absent; skipping.")
             return
         object_ids = [self._make_object_id(int(identifier)) for identifier in ids]
         for obj_id in object_ids:
@@ -242,11 +255,11 @@ class Weaviate(VectorDatabase):
             raise WeaviateError(msg)
         count = 0
         try:
-            data = self._client.query.aggregate(self.class_name).with_meta_count().do()
+            data = self._client.query.aggregate(self.collection_name).with_meta_count().do()
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
-                logger.warning(f" stats requested before schema exists (class={self.class_name}).")
+                logger.warning(f" stats requested before schema exists (class={self.collection_name}).")
             else:  # unexpected failure should propagate as WeaviateError
                 self._handle_exception("failed to fetch stats", exc)
         else:
@@ -254,11 +267,11 @@ class Weaviate(VectorDatabase):
         stats = {
             "ntotal": count,
             "metric": self.metric.value,
-            "class_name": self.class_name,
+            "class_name": self.collection_name,
             "url": self.url,
             "dim": self.dim,
         }
-        logger.debug(f" Stats for {self.class_name} => {stats}")
+        logger.debug(f" Stats for {self.collection_name} => {stats}")
         return stats
 
     # ------------------------------------------------------------------
@@ -297,7 +310,7 @@ class Weaviate(VectorDatabase):
             self._handle_exception("failed to probe class", exc)
 
         classes = schema.get("classes", [])
-        return any(entry.get("class") == self.class_name for entry in classes)
+        return any(entry.get("class") == self.collection_name for entry in classes)
 
     def _ensure_schema_exists(self) -> None:
         """Create the Weaviate class if it does not already exist."""
@@ -314,11 +327,11 @@ class Weaviate(VectorDatabase):
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code == HTTPStatus.UNPROCESSABLE_ENTITY and "already exists" in str(exc).lower():
-                logger.info(f" Class {self.class_name} already exists; continuing.")
+                logger.info(f" Class {self.collection_name} already exists; continuing.")
                 return
             self._handle_exception("failed to create class", exc)
 
-        logger.info(f" Created class {self.class_name}")
+        logger.info(f" Created class {self.collection_name}")
 
     def _drop_class_if_exists(self) -> None:
         """Drop the target class if it already exists."""
@@ -326,7 +339,7 @@ class Weaviate(VectorDatabase):
             msg = "Weaviate client not configured; cannot drop existing class."
             raise WeaviateError(msg)
         try:
-            self._client.schema.delete_class(self.class_name)
+            self._client.schema.delete_class(self.collection_name)
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code != HTTPStatus.NOT_FOUND:
@@ -336,8 +349,8 @@ class Weaviate(VectorDatabase):
         """Return the schema definition submitted to Weaviate."""
 
         return {
-            "class": self.class_name,
-            "description": f"{self.class_name}_iNatInqPerf",
+            "class": self.collection_name,
+            "description": f"{self.collection_name}_iNatInqPerf",
             "vectorizer": self.vectorizer,
             "vectorIndexType": self._index_type,
             "vectorIndexConfig": {
@@ -444,7 +457,7 @@ class Weaviate(VectorDatabase):
         if callable(add):
             add(
                 data_object=properties,
-                class_name=self.class_name,
+                class_name=self.collection_name,
                 uuid=obj_id,
                 vector=vector,
             )
@@ -498,7 +511,7 @@ class Weaviate(VectorDatabase):
 
         data = payload.get("data", {})
         get_section = data.get("Get", {})
-        hits = get_section.get(self.class_name, [])
+        hits = get_section.get(self.collection_name, [])
 
         results: list[SearchResult] = []
         for hit in hits:
@@ -526,7 +539,7 @@ class Weaviate(VectorDatabase):
 
         data = payload.get("data", {})
         aggregate = data.get("Aggregate", {})
-        entries = aggregate.get(self.class_name, [])
+        entries = aggregate.get(self.collection_name, [])
         if not entries:
             return 0
 
@@ -549,7 +562,7 @@ class Weaviate(VectorDatabase):
     def _delete_object(self, obj_id: str) -> None:
         """Delete a single object, tolerating 404 responses."""
         try:
-            self._client.data_object.delete(obj_id, class_name=self.class_name)
+            self._client.data_object.delete(obj_id, class_name=self.collection_name)
         except Exception as exc:  # pragma: no cover - defensive programming
             status_code = self._status_code(exc)
             if status_code not in {HTTPStatus.NOT_FOUND}:

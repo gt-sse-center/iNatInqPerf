@@ -29,11 +29,19 @@ from inatinqperf.utils.embed import (
 @contextmanager
 def container_context(config: Config) -> Generator[object]:
     """Context manager for running the vector database container."""
-    containers = []
+    containers: list[object] = []
 
-    if hasattr(config, "containers"):
-        client = docker.from_env()
-        for container_cfg in config.containers:
+    configured_containers = getattr(config, "containers", None) or []
+    if not configured_containers:
+        logger.info("No container configuration provided, not running container")
+        yield containers
+        return
+
+    client = docker.from_env()
+    try:
+        for container_cfg in configured_containers:
+            if container_cfg is None:
+                continue
             container = client.containers.run(
                 container_cfg.image,
                 ports=container_cfg.ports,
@@ -49,16 +57,19 @@ def container_context(config: Config) -> Generator[object]:
             )
             containers.append(container)
             logger.info(f"Running container with image: {container_cfg.image}")
-    else:
-        logger.info("No container configuration provided, not running container")
 
-    try:
         yield containers
-
     finally:
-        # Stop containers in reverse order
-        for container in containers[::-1]:
-            container.stop()
+        try:
+            for container in containers[::-1]:
+                container.stop()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Failed to stop container: {exc}")
+
+        try:
+            client.close()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Failed to closing client connection: {exc}")
 
 
 class Benchmarker:

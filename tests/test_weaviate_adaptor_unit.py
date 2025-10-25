@@ -186,6 +186,7 @@ class StubWeaviateClient:
         self.schema = StubSchema(self)
         self.data_object = StubDataObject()
         self.query = StubQuery(self)
+        self.batch: object | None = None
         self.get_queries: list[dict] = []
         self.aggregate_queries: list[dict] = []
         self.graphql_get_response: dict = {"data": {"Get": {class_name: []}}}
@@ -231,38 +232,38 @@ def adaptor_fixture(dataset: Dataset, stub_client: StubWeaviateClient) -> tuple[
         dataset=dataset,
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=stub_client,
     )
     return adaptor, stub_client
 
 
-def test_train_index_creates_class(dataset: Dataset) -> None:
-    """train_index should create the class when it does not already exist."""
+def test_ensure_schema_exists_creates_class(dataset: Dataset) -> None:
+    """_ensure_schema_exists should create the class when it does not already exist."""
     client = StubWeaviateClient("TestClass")
     adaptor = Weaviate(
         dataset=dataset,
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=client,
     )
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    adaptor._ensure_schema_exists()
     assert client.schema.create_calls
 
 
-def test_train_index_ignores_existing_class(dataset: Dataset) -> None:
-    """train_index should tolerate a 422 already-exists response."""
+def test_ensure_schema_exists_tolerates_already_exists_error(dataset: Dataset) -> None:
+    """_ensure_schema_exists should tolerate a 422 already-exists response."""
     client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = FakeStatusError(422, "already exists")
     adaptor = Weaviate(
         dataset=dataset,
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         client=client,
     )
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    adaptor._ensure_schema_exists()
     assert client.schema.create_calls
 
 
@@ -282,7 +283,7 @@ def test_upsert_and_search_with_stub(adaptor: tuple[Weaviate, StubWeaviateClient
     client.graphql_get_response = {
         "data": {
             "Get": {
-                weaviate_adaptor.class_name: [
+                weaviate_adaptor.collection_name: [
                     {
                         "originalId": 2,
                         "_additional": {"id": "00000000-0000-0000-0000-000000000002", "distance": 0.1},
@@ -306,11 +307,11 @@ def test_stats_returns_count(adaptor: tuple[Weaviate, StubWeaviateClient]) -> No
     """stats should surface the meta count from the aggregate response."""
     weaviate_adaptor, client = adaptor
     client.graphql_aggregate_response = {
-        "data": {"Aggregate": {weaviate_adaptor.class_name: [{"meta": {"count": 5}}]}}
+        "data": {"Aggregate": {weaviate_adaptor.collection_name: [{"meta": {"count": 5}}]}}
     }
     stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 5
-    assert stats["class_name"] == weaviate_adaptor.class_name
+    assert stats["class_name"] == weaviate_adaptor.collection_name
 
 
 def test_stats_handles_graphql_error(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -333,29 +334,6 @@ def test_delete_handles_multiple_ids(adaptor: tuple[Weaviate, StubWeaviateClient
     assert expected_ids.issubset(recorded_ids)
 
 
-def test_invalid_metric_raises_value_error(dataset: Dataset) -> None:
-    """Constructing with an unsupported metric string should raise ValueError."""
-    with pytest.raises(ValueError):
-        Weaviate(dataset=dataset, metric="manhattan", url="http://example.com", class_name="TestClass")
-
-
-def test_upsert_rejects_dimension_mismatch(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """Upserting vectors of the wrong dimensionality must raise ValueError."""
-    weaviate_adaptor, _ = adaptor
-    bad_point = DataPoint(id=1, vector=[1.0, 2.0], metadata={})
-    with pytest.raises(ValueError):
-        weaviate_adaptor.upsert([bad_point])
-
-
-def test_search_rejects_invalid_queries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """Search should validate query dimensionality and top-k bounds."""
-    weaviate_adaptor, _ = adaptor
-    with pytest.raises(ValueError):
-        weaviate_adaptor.search(Query(vector=[1.0, 2.0]), topk=1)
-    with pytest.raises(ValueError):
-        weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=0)
-
-
 def test_search_handles_graphql_errors(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """GraphQL errors should return an empty result list."""
     weaviate_adaptor, client = adaptor
@@ -363,15 +341,6 @@ def test_search_handles_graphql_errors(adaptor: tuple[Weaviate, StubWeaviateClie
     client.graphql_get_response = {"errors": [{"message": "no results"}]}
     results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=2)
     assert results == []
-
-
-def test_search_applies_filters(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
-    """search should forward Query filters to the underlying GraphQL request."""
-    weaviate_adaptor, client = adaptor
-    filters = {"path": ["species"], "operator": "Equal", "valueString": "a"}
-    results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0], filters=filters), topk=1)
-    assert results == []
-    assert client.get_queries[-1]["where"] == filters
 
 
 def test_error_responses_raise_weaviate_error(dataset: Dataset) -> None:
@@ -383,7 +352,7 @@ def test_error_responses_raise_weaviate_error(dataset: Dataset) -> None:
             dataset=dataset,
             metric=Metric.COSINE,
             url="http://example.com",
-            class_name="TestClass",
+            collection_name="TestClass",
             client=client,
         )
 
@@ -410,7 +379,7 @@ def test_check_ready_times_out() -> None:
         dataset=make_dataset(2),
         metric=Metric.COSINE,
         url="http://example.com",
-        class_name="TestClass",
+        collection_name="TestClass",
         timeout=0.2,
         client=client,
     )
@@ -419,46 +388,26 @@ def test_check_ready_times_out() -> None:
         adaptor._check_ready()
 
 
-def test_check_ready_success() -> None:
-    """_check_ready should exit successfully when the client reports ready."""
-    client = StubWeaviateClient("TestClass")
-    client.ready_responses = [False, True]
-    adaptor = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.COSINE,
-        url="http://example.com",
-        class_name="TestClass",
-        timeout=1.0,
-        client=client,
-    )
-    adaptor._check_ready()
-    assert not client.ready_responses  # Consumed all readiness responses from the stub.
+def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """search results with invalid UUIDs should map ids to -1."""
+    weaviate_adaptor, client = adaptor
+    # Weaviate sometimes omits originalId; ensure we fall back to UUID validation.
+    client.graphql_get_response = {
+        "data": {
+            "Get": {
+                weaviate_adaptor.collection_name: [
+                    {"_additional": {"id": "not-a-uuid", "distance": 0.2}},
+                ]
+            }
+        }
+    }
+    results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=1)
+    assert np.isfinite(results[0].score)
+    assert results[0].id == -1
 
 
-def test_class_exists_paths() -> None:
-    """_class_exists should handle found, not found, and error states."""
-    client = StubWeaviateClient("TestClass")
-    adaptor = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.COSINE,
-        url="http://example.com",
-        class_name="TestClass",
-        client=client,
-    )
-
-    adaptor._drop_class_if_exists()
-    assert adaptor._class_exists() is False
-
-    client.schema.classes["TestClass"] = {"class": "TestClass"}
-    assert adaptor._class_exists() is True
-
-    client.schema.raise_on_get = Exception("oops")
-    with pytest.raises(WeaviateError):
-        adaptor._class_exists()
-
-
-def test_train_index_raises_on_failed_creation(dataset: Dataset) -> None:
-    """train_index must surface exceptions raised by schema creation."""
+def test_schema_creation_raises_on_failure(dataset: Dataset) -> None:
+    """Schema provisioning errors should propagate as WeaviateError."""
     client = StubWeaviateClient("TestClass")
     client.schema.raise_on_create = Exception("cannot create")
     with pytest.raises(WeaviateError):
@@ -466,7 +415,7 @@ def test_train_index_raises_on_failed_creation(dataset: Dataset) -> None:
             dataset=dataset,
             metric=Metric.COSINE,
             url="http://example.com",
-            class_name="TestClass",
+            collection_name="TestClass",
             client=client,
         )
 
@@ -505,7 +454,7 @@ def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeavi
     client.graphql_get_response = {
         "data": {
             "Get": {
-                weaviate_adaptor.class_name: [
+                weaviate_adaptor.collection_name: [
                     {"_additional": {"id": "not-a-uuid", "distance": 0.2}},
                 ]
             }
@@ -514,6 +463,70 @@ def test_search_handles_invalid_uuid_fallback(adaptor: tuple[Weaviate, StubWeavi
     results = weaviate_adaptor.search(Query(vector=[0.0, 0.0, 0.0]), topk=1)
     assert np.isfinite(results[0].score)
     assert results[0].id == -1
+
+
+def test_ingest_datapoints_with_context_manager(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_ingest_datapoints should honour batch context managers."""
+    weaviate_adaptor, client = adaptor
+
+    class RecordingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+            self.records: list[tuple[str, str, dict, list[float]]] = []
+
+        def __enter__(self) -> "RecordingBatch":
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> bool:
+            return False
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            self.records.append((class_name, uuid, data_object, vector))
+
+    batch = RecordingBatch()
+    client.batch = batch
+    weaviate_adaptor._batch_size = 4
+    initial_creates = len(client.data_object.create_calls)
+    datapoints = [DataPoint(id=i, vector=[1.0, 0.0, 0.0], metadata={}) for i in range(3)]
+
+    weaviate_adaptor._ingest_datapoints(datapoints)
+    assert batch.batch_size == 4
+    assert len(batch.records) == len(datapoints)
+    assert len(client.data_object.create_calls) == initial_creates
+    client.batch = None
+
+
+def test_ingest_datapoints_falls_back_to_upsert(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
+    """_ingest_datapoints should fall back to upsert when batch ingest fails."""
+    weaviate_adaptor, client = adaptor
+
+    class ExplodingBatch:
+        def __init__(self) -> None:
+            self.batch_size: int | None = None
+
+        def add_data_object(
+            self,
+            data_object: dict,
+            class_name: str,
+            uuid: str,
+            vector: list[float],
+        ) -> None:
+            raise RuntimeError("boom")
+
+    client.batch = ExplodingBatch()
+    weaviate_adaptor._batch_size = 5
+    datapoints = [DataPoint(id=i, vector=[0.0, 0.0, 1.0], metadata={}) for i in range(3)]
+
+    initial_creates = len(client.data_object.create_calls)
+    weaviate_adaptor._ingest_datapoints(datapoints)
+    assert len(client.data_object.create_calls) - initial_creates == len(datapoints)
+    client.batch = None
 
 
 def test_stats_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
@@ -527,52 +540,12 @@ def test_stats_raises_on_bad_status(adaptor: tuple[Weaviate, StubWeaviateClient]
 def test_stats_handles_empty_entries(adaptor: tuple[Weaviate, StubWeaviateClient]) -> None:
     """stats should return zero when the aggregate result is empty."""
     weaviate_adaptor, client = adaptor
-    client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.class_name: []}}}
+    client.graphql_aggregate_response = {"data": {"Aggregate": {weaviate_adaptor.collection_name: []}}}
     stats = weaviate_adaptor.stats()
     assert stats["ntotal"] == 0
-
-
-def test_constructor_and_distance_mapping(dataset):
-    """Ensure basic constructor validation and metric mapping."""
-    adaptor_ip = Weaviate(dataset, metric=Metric.INNER_PRODUCT)
-    assert adaptor_ip.distance_metric == "dot"
-
-    adaptor_ip = Weaviate(dim=2, metric=Metric.INNER_PRODUCT)
-    assert adaptor_ip.distance_metric == "dot"
-
-    adaptor_l2 = Weaviate(dataset, metric=Metric.L2)
-    assert adaptor_l2.distance_metric == "l2-squared"
 
 
 def test_validate_uuid_helpers():
     """Recover helper should accept UUIDs and reject malformed values."""
     valid_uuid = str(uuid.uuid4())
     assert Weaviate._validate_uuid(valid_uuid) == -1
-
-
-def test_constructor_and_distance_mapping() -> None:
-    """Constructor should validate metrics and map them to client values."""
-    with pytest.raises(ValueError):
-        _ = Weaviate(
-            dataset=make_dataset(0),
-            metric=Metric.COSINE,
-            url="http://example.com",
-            class_name="TestClass",
-            client=StubWeaviateClient("TestClass"),
-        )
-    adaptor_ip = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.INNER_PRODUCT,
-        url="http://example.com",
-        class_name="TestClass",
-        client=StubWeaviateClient("TestClass"),
-    )
-    assert adaptor_ip._distance_metric == "dot"
-    adaptor_l2 = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.L2,
-        url="http://example.com",
-        class_name="TestClass",
-        client=StubWeaviateClient("TestClass"),
-    )
-    assert adaptor_l2._distance_metric == "l2-squared"

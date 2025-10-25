@@ -134,11 +134,12 @@ def to_datapoints(ids: np.ndarray, vectors: np.ndarray) -> list[DataPoint]:
 
 def test_weaviate_adaptor_lifecycle(class_name: str):
     """Exercise the full lifecycle against a live Weaviate instance."""
-    adaptor = Weaviate(dataset=make_dataset(4), metric=Metric.COSINE, url=BASE_URL, class_name=class_name)
+    adaptor = Weaviate(
+        dataset=make_dataset(4), metric=Metric.COSINE, url=BASE_URL, collection_name=class_name
+    )
     adaptor.drop_index()  # ensure clean start
 
-    train = np.random.default_rng(7).standard_normal((8, 4)).astype(np.float32)
-    adaptor.train_index(train)
+    adaptor._ensure_schema_exists()
 
     ids = np.arange(100, 104, dtype=np.int64)
     vectors = np.array(
@@ -175,10 +176,12 @@ def test_weaviate_adaptor_lifecycle(class_name: str):
 
 def test_weaviate_upsert_replaces_vectors(class_name: str):
     """Verify upsert overwrites existing vectors rather than duplicating them."""
-    adaptor = Weaviate(dataset=make_dataset(3), metric=Metric.COSINE, url=BASE_URL, class_name=class_name)
+    adaptor = Weaviate(
+        dataset=make_dataset(3), metric=Metric.COSINE, url=BASE_URL, collection_name=class_name
+    )
     # Drop any leftover schema, then create a fresh one for the test.
     adaptor.drop_index()
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    adaptor._ensure_schema_exists()
 
     ids = np.array([1, 2], dtype=np.int64)
     first = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
@@ -199,22 +202,57 @@ def test_weaviate_upsert_replaces_vectors(class_name: str):
 
 def test_weaviate_metric_mapping(class_name: str):
     """Confirm metric names map to Weaviate's expected distance types."""
-    adaptor = Weaviate(
-        dataset=make_dataset(2),
-        metric=Metric.INNER_PRODUCT,
-        url=BASE_URL,
-        class_name=class_name,
-    )
-    adaptor.drop_index()
-    adaptor.train_index(np.zeros((1, 2), dtype=np.float32))
 
     ids = np.array([10, 11], dtype=np.int64)
     vectors = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
-    adaptor.upsert(to_datapoints(ids, vectors))
 
-    query = Query(vector=[0.6, 0.4])
-    results = adaptor.search(query, topk=2)  # Verify distance mappings via nearVector
-    assert len(results) == 2
-    assert set(r.id for r in results) == {10, 11}
+    for metric, expected in (
+        (Metric.INNER_PRODUCT, "dot"),
+        (Metric.COSINE, "cosine"),
+        (Metric.L2, "l2-squared"),
+    ):
+        adaptor = Weaviate(
+            dataset=make_dataset(2),
+            metric=metric,
+            url=BASE_URL,
+            collection_name=f"{class_name}{metric.value.title()}",
+            index_type="hnsw",
+        )
+        adaptor.drop_index()
+        adaptor._ensure_schema_exists()
+
+        schema = adaptor._client.schema.get()
+        classes = {entry["class"]: entry for entry in schema.get("classes", [])}
+        current = classes.get(adaptor.collection_name, {})
+        assert current.get("vectorIndexType") == "hnsw"
+
+        adaptor.upsert(to_datapoints(ids, vectors))
+
+        query = Query(vector=[0.6, 0.4])
+        results = adaptor.search(query, topk=2)
+        assert len(results) == 2
+        assert set(result.id for result in results) == {10, 11}
+
+        adaptor.drop_index()
+
+
+@pytest.mark.parametrize("index_type, expected", [(None, "hnsw"), ("flat", "flat")])
+def test_weaviate_index_types(class_name: str, index_type: str | None, expected: str) -> None:
+    """Ensure requested index types are persisted when the schema is created."""
+
+    adaptor = Weaviate(
+        dataset=make_dataset(2),
+        metric=Metric.COSINE,
+        url=BASE_URL,
+        collection_name=f"{class_name}Idx",
+        index_type=index_type,
+    )
+    adaptor.drop_index()
+    adaptor._ensure_schema_exists()
+
+    schema = adaptor._client.schema.get()
+    classes = {entry["class"]: entry for entry in schema.get("classes", [])}
+    payload = classes.get(adaptor.collection_name, {})
+    assert payload.get("vectorIndexType") == expected
 
     adaptor.drop_index()

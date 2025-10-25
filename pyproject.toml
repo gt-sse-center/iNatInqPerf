@@ -72,8 +72,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-# TODO(VarunA) Remove ignore-glob and update coverage when Weaviate interface is ready.
-addopts = "--verbose -vv --capture=no --cov=inatinqperf --cov-report html --cov-report term --cov-report xml:coverage.xml --cov-fail-under=70.0 --ignore-glob=tests/*weaviate*"
+addopts = "--verbose -vv --capture=no --cov=inatinqperf --cov-report html --cov-report term --cov-report xml:coverage.xml --cov-fail-under=70.0"
 norecursedirs = [
     "tests/vectordbs",
 ]
@@ -90,7 +89,6 @@ select = ["ALL"]
 ignore = [
     "ANN002", # Missing type annotation for `*args`
     "ANN003", # Missing type annotation for `**kwargs`
-    "B905", # `strict` in zip
     "BLE001", # Do not catch blind exception: `Exception`
     "B905", # `zip()` without an explicit `strict=` parameter
     "BLE001", # Do not catch blind exception: `Exception`

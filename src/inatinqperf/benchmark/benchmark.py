@@ -1,11 +1,9 @@
 """Vector database-agnostic benchmark orchestrator."""
 
 import time
-from collections.abc import Generator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from pathlib import Path
 
-import docker
 import numpy as np
 import yaml
 from datasets import Dataset
@@ -24,52 +22,6 @@ from inatinqperf.utils.embed import (
     embed_text,
     to_huggingface_dataset,
 )
-
-
-@contextmanager
-def container_context(config: Config) -> Generator[object]:
-    """Context manager for running the vector database container."""
-    containers: list[object] = []
-
-    configured_containers = getattr(config, "containers", None) or []
-    if not configured_containers:
-        logger.info("No container configuration provided, not running container")
-        yield containers
-        return
-
-    client = docker.from_env()
-    try:
-        for container_cfg in configured_containers:
-            if container_cfg is None:
-                continue
-            container = client.containers.run(
-                container_cfg.image,
-                ports=container_cfg.ports,
-                remove=True,
-                detach=True,  # enabled so we don't block on this
-                healthcheck={
-                    "test": container_cfg.healthcheck,
-                    "interval": 30 * 10**9,
-                    "timeout": 20 * 10**9,
-                    "start_period": 30 * 10**9,
-                    "retries": 3,
-                },
-            )
-            containers.append(container)
-            logger.info(f"Running container with image: {container_cfg.image}")
-
-        yield containers
-    finally:
-        try:
-            for container in containers[::-1]:
-                container.stop()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(f"Failed to stop container: {exc}")
-
-        try:
-            client.close()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(f"Failed to closing client connection: {exc}")
 
 
 class Benchmarker:
@@ -284,15 +236,14 @@ class Benchmarker:
         # Build baseline vector database
         baseline_vectordb = self.build_baseline(dataset)
 
-        with container_context(self.cfg):
-            # Build specified vector database
-            vectordb = self.build(dataset)
+        # Build specified vector database
+        vectordb = self.build(dataset)
 
-            # Perform search
-            self.search(dataset, vectordb, baseline_vectordb)
+        # Perform search
+        self.search(dataset, vectordb, baseline_vectordb)
 
-            # Update operations
-            self.update(dataset, vectordb)
+        # Update operations
+        self.update(dataset, vectordb)
 
 
 def ensure_dir(p: Path) -> Path:

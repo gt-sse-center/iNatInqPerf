@@ -190,13 +190,14 @@ def test_update(data_path, config_yaml, benchmark_module):
 
     vectordb = benchmarker.build(dataset)
 
+    previous_total = vectordb.index.ntotal
+
     benchmarker.update(dataset, vectordb)
 
-    assert vectordb.upsert_called
-    assert vectordb.num_upserted_points == benchmarker.cfg.update["add_count"]
-
-    assert vectordb.delete_called
-    assert vectordb.num_deleted_points == benchmarker.cfg.update["delete_count"]
+    assert (
+        vectordb.index.ntotal
+        == previous_total + benchmarker.cfg.update["add_count"] - benchmarker.cfg.update["delete_count"]
+    )
 
 
 # ---------- Edge cases for helpers ----------

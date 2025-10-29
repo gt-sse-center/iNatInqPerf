@@ -35,7 +35,7 @@ class SearchResult:
     """
 
     id: int
-    score: int
+    score: float
 
 
 class VectorDatabase(ABC):

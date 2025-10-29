@@ -26,13 +26,8 @@ def container_fixture():
         },
     )
 
-    # Wait until container is running
-    # We retrieve the latest container state by querying for it
-    while container.status != "running":
-        container = client.containers.get(container.id)
-        continue
-
     yield container
+
     container.stop()
 
 

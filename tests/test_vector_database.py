@@ -27,7 +27,7 @@ def test_partial_implementation_rejected():
         _ = Partial()  # type: ignore[abstract]
 
 
-class DummyVectorDatabase(VectorDatabase):
+class ConcreteVectorDatabase(VectorDatabase):
     """
     A minimal concrete vector database for exercising the VectorDatabase contract.
     Implements brute-force search in-memory to validate shapes & lifecycle.
@@ -41,11 +41,15 @@ class DummyVectorDatabase(VectorDatabase):
 
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
-        self._metric = metric.lower()
+        self._metric = self._translate_metric(metric)
 
         # "Upsert" dataset
         self._X = dataset["embedding"]
         self._ids = dataset["id"]
+
+    @staticmethod
+    def _translate_metric(metric: Metric) -> str:
+        return metric.lower()
 
     def train_index(self, x_train: np.ndarray):
         # Should be a no-op for this dummy; just validate dims
@@ -127,7 +131,7 @@ def tiny_dataset_fixture():
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
 def test_lifecycle_and_shapes(metric, tiny_dataset):
-    db = DummyVectorDatabase(tiny_dataset, metric=metric)
+    db = ConcreteVectorDatabase(tiny_dataset, metric=metric)
 
     # search with two queries
     q = Query([1.0, 0.0])
@@ -154,7 +158,7 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
 
 
 def test_upsert_replaces_existing(tiny_dataset):
-    db = DummyVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
+    db = ConcreteVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
 
     # Upsert same ids with shifted vectors
     tiny_dataset = tiny_dataset.with_format("numpy")

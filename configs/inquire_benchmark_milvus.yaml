@@ -10,14 +10,14 @@ embedding:
   directory: data/inquire_benchmark/emb
 
 vectordb:
-  type: faiss
+  type: milvus
   params:
-    metric: ip
-    index_type: IVFPQ
-    nlist: 32768
-    m: 64
-    nbits: 8
-    nprobe: 32
+    url: localhost
+    port: "19530"
+    collection_name: benchmark
+    index_type: IVF_FLAT
+    metric: l2
+    batch_size: 1000
 
 search:
   topk: 10

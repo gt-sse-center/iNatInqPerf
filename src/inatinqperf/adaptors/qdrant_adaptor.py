@@ -1,20 +1,14 @@
 """Qdrant vector database adaptor."""
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from itertools import islice
 
-import numpy as np
-from qdrant_client import QdrantClient
-from qdrant_client.models import (
-    Batch,
-    Distance,
-    HnswConfigDiff,
-    ScoredPoint,
-    SearchParams,
-    VectorParams,
-)
+from loguru import logger
+from qdrant_client import QdrantClient, models
+from qdrant_client.models import Distance, PointStruct
 
-from inatinqperf.adaptors.base import VectorDatabase
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.enums import Metric
 
 
 class Qdrant(VectorDatabase):
@@ -27,31 +21,73 @@ class Qdrant(VectorDatabase):
 
     def __init__(
         self,
-        dim: int,
+        dataset: HuggingFaceDataset,
         metric: Metric,
-        url: str,
         collection_name: str,
+        url: str,
+        port: str = "6333",
         m: int = 32,
-        ef_construct: int = 128,
+        ef: int = 128,
+        batch_size: int = 1000,
+        **params,  # noqa: ARG002
     ) -> None:
-        self.client = QdrantClient(url=url)
+        super().__init__(dataset=dataset, metric=metric)
+
+        self.client = QdrantClient(url=url, port=port)
         self.collection_name = collection_name
         self.metric = metric
         self.m = m
-        self.ef_construct = ef_construct
+        # The ef value used during collection construction
+        self.ef = ef
+
+        if self.client.collection_exists(collection_name=collection_name):
+            logger.info("Deleted existing collection")
+            self.client.delete_collection(collection_name=collection_name)
 
         if not self.client.collection_exists(collection_name=collection_name):
+            logger.patch(lambda r: r.update(function="constructor")).info(
+                f"Creating collection {collection_name}"
+            )
             self.client.create_collection(
                 collection_name=collection_name,
-                vectors_config=VectorParams(
-                    size=dim,
+                vectors_config=models.VectorParams(
+                    size=self.dim,
                     distance=self._translate_metric(metric),
-                    hnsw_config=HnswConfigDiff(
+                    hnsw_config=models.HnswConfigDiff(
                         m=m,
-                        ef_construct=ef_construct,
+                        ef_construct=ef,
+                        max_indexing_threads=0,
+                        on_disk=False,
                     ),
                 ),
+                shard_number=2,  # reasonable default as per qdrant docs
             )
+
+            # Batch insert dataset
+            for batch in self._batched(dataset, batch_size):
+                ids = [point.pop("id") for point in batch]
+                vectors = [point.pop("embedding") for point in batch]
+
+                self.client.upsert(
+                    collection_name=collection_name,
+                    points=models.Batch(
+                        ids=ids,
+                        vectors=vectors,
+                        payloads=batch,
+                    ),
+                )
+
+            num_points_in_db = self.client.count(
+                collection_name=collection_name,
+                exact=True,
+            ).count
+            logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
+
+    @staticmethod
+    def _batched(iterable: HuggingFaceDataset, n: int) -> Generator[object]:
+        iterator = iter(iterable)
+        while batch := list(islice(iterator, n)):
+            yield batch
 
     @staticmethod
     def _translate_metric(metric: Metric) -> Distance:
@@ -68,47 +104,54 @@ class Qdrant(VectorDatabase):
         msg = f"{metric} metric specified is not a valid one for Qdrant."
         raise ValueError(msg)
 
-    def train_index(self, x_train: np.ndarray) -> None:
-        """For Qdrant, the HNSW index is created when the collection is created.
+    @staticmethod
+    def _points_iterator(data_points: Sequence[DataPoint]) -> Generator[PointStruct]:
+        """A generator to help with creating PointStructs."""
+        for data_point in data_points:
+            yield PointStruct(id=data_point.id, vector=data_point.vector)
 
-        Nothing to do here.
-        """
-
-    def drop_index(self) -> None:
-        """Drop the index by deleting the collection."""
-        self.client.delete_collection(self.collection_name)
-
-    def upsert(self, ids: np.ndarray, x: np.ndarray) -> None:
+    def upsert(self, x: Sequence[DataPoint]) -> None:
         """Upsert vectors with given IDs. This also builds the HNSW index."""
-        self.client.upsert(
+        # Qdrant will override points with the same ID if they already exist,
+        # which is the same behavior as `upsert`.
+        # Hence we use `upload_points` for performance.
+        logger.info("Uploading points to database")
+        self.client.upload_points(
             collection_name=self.collection_name,
-            points=Batch(ids=ids, vectors=x),
+            points=self._points_iterator(data_points=x),
+            parallel=4,
             wait=True,
         )
 
-    def search(self, q: np.ndarray, topk: int, **kwargs) -> Sequence[ScoredPoint]:
+    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
         """Search for top-k nearest neighbors."""
         # Has support for attribute filter: https://qdrant.tech/documentation/quickstart/#add-a-filter
 
         ef = kwargs.get("ef", 128)
         search_result = self.client.query_points(
             collection_name=self.collection_name,
-            query=q,
+            query=q.vector,
             with_payload=False,
             with_vectors=False,
             limit=topk,
-            search_params=SearchParams(hnsw_ef=ef, exact=False),
+            search_params=models.SearchParams(hnsw_ef=ef, exact=False),
         )
-        return search_result.points
+
+        return [SearchResult(point.id, point.score) for point in search_result.points]
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
         self.client.delete(collection_name=self.collection_name, points_selector=ids)
+
+    def delete_collection(self) -> None:
+        """Delete the collection associated with this adaptor instance."""
+        logger.info(f"Deleting collection {self.collection_name}")
+        self.client.delete_collection(collection_name=self.collection_name)
 
     def stats(self) -> dict[str, object]:
         """Return index statistics."""
         return {
             "metric": self.metric.value,
             "m": self.m,
-            "ef_construct": self.ef_construct,
+            "ef_construct": self.ef,
         }

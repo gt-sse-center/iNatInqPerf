@@ -7,6 +7,7 @@ from inatinqperf.benchmark.configuration import (
     SearchParams,
     VectorDatabaseConfig,
     VectorDatabaseParams,
+    ContainerConfig,
 )
 
 
@@ -28,6 +29,7 @@ def test_embedding_params(benchmark_yaml):
 def test_vectordatabase_params(benchmark_yaml):
     params = VectorDatabaseParams(**benchmark_yaml["vectordb"]["params"])
     assert params.metric == "ip"
+    assert params.index_type == "IVFPQ"
     assert params.nlist == 32768
     assert params.m == 64
     assert params.nbits == 2
@@ -36,7 +38,7 @@ def test_vectordatabase_params(benchmark_yaml):
 
 def test_vectordatabase_config(benchmark_yaml):
     config = VectorDatabaseConfig(**benchmark_yaml["vectordb"])
-    assert config.type == "faiss.ivfpq"
+    assert config.type == "faiss"
     assert isinstance(config.params, VectorDatabaseParams)
 
 
@@ -46,10 +48,20 @@ def test_search_params(benchmark_yaml):
     assert params.queries_file == Path("benchmark/queries.txt")
 
 
+def test_container_config_list(benchmark_yaml):
+    containers = [ContainerConfig(**cc) for cc in benchmark_yaml["containers"]]
+    assert len(containers) == 1
+    assert containers[0].image == "qdrant/qdrant"
+    assert len(containers[0].ports) == 1
+    assert containers[0].healthcheck == "healthcheck test"
+
+
 def test_config(benchmark_yaml):
     config = Config(**benchmark_yaml)
     assert isinstance(config.dataset, DatasetConfig)
     assert isinstance(config.embedding, EmbeddingParams)
+    assert isinstance(config.containers, list)
+    assert isinstance(config.containers[0], ContainerConfig)
     assert isinstance(config.vectordb, VectorDatabaseConfig)
     assert isinstance(config.search, SearchParams)
     assert isinstance(config.update, dict)

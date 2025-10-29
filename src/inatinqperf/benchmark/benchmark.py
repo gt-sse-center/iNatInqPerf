@@ -1,22 +1,22 @@
 """Vector database-agnostic benchmark orchestrator."""
 
-import json
 import time
-from http import HTTPStatus
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
+import docker
 import numpy as np
-import requests
-import tqdm
 import yaml
 from datasets import Dataset
 from loguru import logger
+from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS
-from inatinqperf.adaptors.base import VectorDatabase
-from inatinqperf.adaptors.faiss_adaptor import FaissFlat
+from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
+from inatinqperf.utils import Profiler, get_table
 from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
 from inatinqperf.utils.embed import (
     ImageDatasetWithEmbeddings,
@@ -24,7 +24,52 @@ from inatinqperf.utils.embed import (
     embed_text,
     to_huggingface_dataset,
 )
-from inatinqperf.utils.profiler import Profiler
+
+
+@contextmanager
+def container_context(config: Config) -> Generator[object]:
+    """Context manager for running the vector database container."""
+    containers: list[object] = []
+
+    configured_containers = getattr(config, "containers", None) or []
+    if not configured_containers:
+        logger.info("No container configuration provided, not running container")
+        yield containers
+        return
+
+    client = docker.from_env()
+    try:
+        for container_cfg in configured_containers:
+            if container_cfg is None:
+                continue
+            container = client.containers.run(
+                container_cfg.image,
+                ports=container_cfg.ports,
+                remove=True,
+                detach=True,  # enabled so we don't block on this
+                healthcheck={
+                    "test": container_cfg.healthcheck,
+                    "interval": 30 * 10**9,
+                    "timeout": 20 * 10**9,
+                    "start_period": 30 * 10**9,
+                    "retries": 3,
+                },
+            )
+            containers.append(container)
+            logger.info(f"Running container with image: {container_cfg.image}")
+
+        yield containers
+    finally:
+        try:
+            for container in containers[::-1]:
+                container.stop()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Failed to stop container: {exc}")
+
+        try:
+            client.close()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Failed to closing client connection: {exc}")
 
 
 class Benchmarker:
@@ -38,7 +83,8 @@ class Benchmarker:
             base_path (Path | None, optional): The path to which all data will be saved.
                 If None, it will be set to the root directory of the project.
         """
-        logger.info(f"Loading config: {config_file}")
+        logger.patch(lambda r: r.update(function="constructor")).info(f"Loading config: {config_file}")
+
         with config_file.open("r") as f:
             cfg = yaml.safe_load(f)
         # Load into Config class to validate properties
@@ -87,6 +133,7 @@ class Benchmarker:
         batch_size = self.cfg.embedding.batch_size
 
         dataset_dir = self.base_path / self.cfg.dataset.directory
+        logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
         with Profiler("embed-images"):
             dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
@@ -111,80 +158,28 @@ class Benchmarker:
 
         logger.info(f"Embeddings: {dse.embeddings.shape} -> {embeddings_dir}")
 
-        return huggingface_dataset
-
-    @staticmethod
-    def init_vectordb(vdb_type: str, dim: int, init_params: dict[str, Any]) -> VectorDatabase:
-        """Initialize vector database."""
-        return VECTORDBS[vdb_type](dim=dim, **init_params)
+        return huggingface_dataset.with_format("numpy")
 
     def build(self, dataset: Dataset) -> VectorDatabase:
         """Build index for the specified vectordb."""
         vdb_type = self.cfg.vectordb.type
+        logger.info(f"Building {vdb_type} vector database")
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
-        ids = np.array(dataset["id"], dtype=np.int64)
-
-        logger.info("Building vector database")
         init_params = self.cfg.vectordb.params.to_dict()
-        if vdb_type.startswith("weaviate"):
-            self._validate_weaviate_params(init_params)
-        vdb = self.init_vectordb(vdb_type, x.shape[1], init_params=init_params)
 
         with Profiler(f"build-{vdb_type}"):
-            # training if needed
-            vdb.train_index(x)
-            vdb.upsert(ids, x)
+            vdb = VECTORDBS[vdb_type](dataset, **init_params)
 
         logger.info(f"Stats: {vdb.stats()}")
 
         return vdb
 
-    @staticmethod
-    def _validate_weaviate_params(params: dict[str, Any]) -> None:
-        """Ensure required Weaviate settings exist and the service is reachable."""
-
-        required_keys = ["base_url", "class_name"]
-        missing = [key for key in required_keys if not params.get(key)]
-        if missing:
-            missing_str = ", ".join(missing)
-            raise ValueError(
-                "Weaviate configuration missing required parameter(s): "
-                + missing_str
-                + "Please update your benchmark config."
-            )
-
-        base_url = str(params.pop("base_url")).rstrip("/")
-        params["base_url"] = base_url
-        params.pop("container_hint", None)
-        readiness_endpoint = f"{base_url}/v1/.well-known/ready"
-
-        try:
-            response = requests.get(readiness_endpoint, timeout=5)
-        except requests.RequestException as exc:
-            error_desc = f"Make sure a weaviate container is running and serving at {base_url}."
-            raise RuntimeError("Unable to reach Weaviate" + error_desc) from exc
-
-        if response.status_code != HTTPStatus.OK:
-            error_desc = f" Weaviate readiness enpoint returned status code {response.status_code}."
-            raise RuntimeError(
-                "Weaviate readiness endpoint "
-                + error_desc
-                + "Start or fix the Weaviate container before running the benchmark."
-            )
-
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
-        x = np.stack(dataset["embedding"]).astype(np.float32)
         metric = self.cfg.vectordb.params.metric.lower()
 
         # Create exact baseline
-        d = x.shape[1]
-
-        faiss_flat_db = FaissFlat(dim=d, metric=metric)
-        ids = np.arange(x.shape[0], dtype=np.int64)
-        faiss_flat_db.upsert(ids=ids, x=x)
-
+        faiss_flat_db = Faiss(dataset, metric=metric, index_type="FLAT")
         logger.info("Created exact baseline index")
 
         return faiss_flat_db
@@ -193,8 +188,6 @@ class Benchmarker:
         """Profile search and compute recall@K vs exact baseline."""
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
-
-        x = np.stack(dataset["embedding"]).astype(np.float32)
 
         topk = self.cfg.search.topk
 
@@ -210,34 +203,50 @@ class Benchmarker:
         q = embed_text(queries, model_id)
         logger.info("Embedded all queries")
 
-        # search + profile
-        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
-            lat = []
-            _, i0 = baseline_vectordb.search(q, topk)  # exact
+        logger.info("Performing search on baseline")
+        with Profiler("search-baseline-FaissFlat") as p:
+            i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
+            for i in tqdm(range(q.shape[0])):
+                base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
+                padded = _ids_to_fixed_array(base_results, topk)
+                i0[i] = padded
 
-            for i in tqdm.tqdm(range(q.shape[0])):
+        # search + profile
+        logger.info(f"Performing search on {self.cfg.vectordb.type}")
+        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
+            latencies = []
+            for i in tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
-                _, _ = vectordb.search(q[i : i + 1], topk, **params.to_dict())
-                lat.append((time.perf_counter() - t0) * 1000.0)
+                vectordb.search(Query(q[i]), topk, **params.to_dict())
+                latencies.append((time.perf_counter() - t0) * 1000.0)
 
             p.sample()
 
-        # recall@K (compare last retrieved to baseline per query)
+        logger.info("recall@K (compare last retrieved to baseline per query")
         # For simplicity compute approximate on whole Q at once:
-        _, i1 = vectordb.search(q, topk, **params.to_dict())
+        i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
+        for i in tqdm(range(q.shape[0])):
+            results = vectordb.search(Query(q[i]), topk, **params.to_dict())
+            padded = _ids_to_fixed_array(results, topk)
+            i1[i] = padded
         rec = recall_at_k(i1, i0, topk)
+
+        x = np.asarray(dataset["embedding"], dtype=np.float32)
 
         stats = {
             "vectordb": self.cfg.vectordb.type,
+            "index_type": self.cfg.vectordb.params.index_type,
             "topk": topk,
-            "lat_ms_avg": float(np.mean(lat)),
-            "lat_ms_p50": float(np.percentile(lat, 50)),
-            "lat_ms_p95": float(np.percentile(lat, 95)),
+            "lat_ms_avg": float(np.mean(latencies)),
+            "lat_ms_p50": float(np.percentile(latencies, 50)),
+            "lat_ms_p95": float(np.percentile(latencies, 95)),
             "recall@k": rec,
             "ntotal": int(x.shape[0]),
         }
 
-        logger.info(json.dumps(stats, indent=2))
+        # Make values as lists so `tabulate` can print properly.
+        table = get_table(stats)
+        logger.info(f"\n\n{table}\n\n")
 
     def update(self, dataset: Dataset, vectordb: VectorDatabase) -> None:
         """Upsert + delete small batch and re-search."""
@@ -246,23 +255,23 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.stack(dataset["embedding"]).astype(np.float32)
+        x = np.asarray(dataset["embedding"], dtype=np.float32)
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)
         add_vecs = x[:add_n].copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
-        add_vecs /= np.linalg.norm(add_vecs, axis=1, keepdims=True) + 1e-9
-        add_ids = np.arange(10_000_000, 10_000_000 + add_n, dtype=np.int64)
+        add_ids = list(range(add_n))
 
         with Profiler(f"update-add-{vdb_type}"):
-            vectordb.upsert(add_ids, add_vecs)
+            data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]
+            vectordb.upsert(data_points)
 
         with Profiler(f"update-delete-{vdb_type}"):
-            del_ids = list(add_ids[:del_n])
+            del_ids = add_ids[:del_n]
             vectordb.delete(del_ids)
 
-        logger.info("Update complete.", vectordb.stats())
+        logger.info(f"Update complete: {vectordb.stats()}")
 
     def run(self) -> None:
         """Run end-to-end benchmark with all steps."""
@@ -275,14 +284,15 @@ class Benchmarker:
         # Build baseline vector database
         baseline_vectordb = self.build_baseline(dataset)
 
-        # Build specified vector database
-        vectordb = self.build(dataset)
+        with container_context(self.cfg):
+            # Build specified vector database
+            vectordb = self.build(dataset)
 
-        # Perform search
-        self.search(dataset, vectordb, baseline_vectordb)
+            # Perform search
+            self.search(dataset, vectordb, baseline_vectordb)
 
-        # Update operations
-        self.update(dataset, vectordb)
+            # Update operations
+            self.update(dataset, vectordb)
 
 
 def ensure_dir(p: Path) -> Path:
@@ -297,3 +307,15 @@ def recall_at_k(approx_i: np.ndarray, exact_i: np.ndarray, k: int) -> float:
     for i in range(approx_i.shape[0]):
         hits += len(set(approx_i[i, :k]).intersection(set(exact_i[i, :k])))
     return hits / float(approx_i.shape[0] * k)
+
+
+def _ids_to_fixed_array(results: Sequence[SearchResult], topk: int) -> np.ndarray:
+    """Convert a list of SearchResult objects into a fixed-length array."""
+
+    arr = np.full(topk, -1.0, dtype=float)
+    if not results:
+        return arr
+
+    count = min(topk, len(results))
+    arr[:count] = [float(results[i].id) for i in range(count)]
+    return arr

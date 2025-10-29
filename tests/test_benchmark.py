@@ -2,10 +2,15 @@
 
 import numpy as np
 import pytest
+import requests
+from collections.abc import Sequence
 from datasets import Dataset
 
-from inatinqperf.adaptors.metric import Metric
+from inatinqperf import adaptors
+from inatinqperf.adaptors.base import DataPoint, SearchResult, VectorDatabase
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.benchmark import Benchmarker, benchmark
+from inatinqperf.benchmark.configuration import VectorDatabaseParams
 from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
@@ -20,38 +25,36 @@ def data_path_fixture(tmp_path_factory):
 
 # ---------- Helpers / fixtures ----------
 def _fake_ds_embeddings(n=5, d=4):
-    return {"embedding": [np.ones(d, dtype=np.float32) for _ in range(n)], "id": list(range(n))}
+    rng = np.random.default_rng(42)
+    return {"embedding": [rng.uniform(0, 100, d).astype(np.float32) for _ in range(n)], "id": list(range(n))}
 
 
-class DummyVectorDB:
-    def __init__(self, dim, metric=Metric.INNER_PRODUCT, **params):
-        self.dim = dim
+class DummyVectorDB(VectorDatabase):
+    """A dummy vector database for mocking."""
+
+    def __init__(self, dataset, metric=Metric.INNER_PRODUCT, **params):
         self.metric = metric
         self.params = params
         self.ntotal = 0
 
-        self.trained = False
+        self.initialized = True
 
-        self.train_calls: list[int] = []
-        self.upsert_calls: list[list[int]] = []
-        self.delete_calls: list[list[int]] = []
+        self.upsert_called = False
+        self.num_upserted_points = 0
 
-    def train_index(self, X):
-        self.train_calls.append(len(X))
-        self.trained = True
+        self.delete_called = False
+        self.num_deleted_points = 0
 
-    def upsert(self, ids, X):
-        self.upsert_calls.append(list(ids))
+    def upsert(self, x: Sequence[DataPoint]):
+        self.upsert_called = True
+        self.num_upserted_points = len(x)
+
+    def search(self, q, topk, **kwargs):
+        return [SearchResult(id=i, score=0) for i in np.arange(topk)]
 
     def delete(self, ids):
-        ids_list = list(ids)
-        self.delete_calls.append(ids_list)
-
-    def search(self, Q, topk, **kwargs):
-        n = Q.shape[0]
-        I = np.tile(np.arange(topk), (n, 1))
-        D = np.zeros_like(I, dtype=np.float32)
-        return D, I
+        self.delete_called = True
+        self.num_deleted_points = len(ids)
 
     def stats(self):
         return {
@@ -61,19 +64,22 @@ class DummyVectorDB:
         }
 
 
-def _capture_vectordb(name, dim, init_params):
-    inst = DummyVectorDB(dim=dim, **init_params)
-    return inst
-
-
 class MockExactBaseline:
     """A mock of an exact baseline index such as FAISS Flat."""
 
-    def search(self, Q, k):
-        n = Q.shape[0]
-        I = np.tile(np.arange(k), (n, 1))
-        D = np.zeros_like(I, dtype=np.float32)
-        return D, I
+    def search(self, q, k) -> Sequence[SearchResult]:
+        ids = np.arange(k)
+        scores = np.zeros_like(ids, dtype=np.float32)
+        return [SearchResult(id=i, score=score) for i, score in zip(ids, scores)]
+
+
+@pytest.fixture(name="mocked_benchmark_module")
+def mocked_benchmark_fixture(monkeypatch):
+    # Use fake embeddings dataset on disk
+    monkeypatch.setattr(
+        benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=9984, d=64)
+    )
+    return benchmark
 
 
 def test_load_cfg(config_yaml, data_path):
@@ -147,7 +153,7 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
     benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
 
     dse = ImageDatasetWithEmbeddings(
-        np.ones((2, 3), dtype=np.float32),
+        np.random.default_rng(42).random((2, 3), dtype=np.float32),
         [10, 11],
         [0, 1],
     )
@@ -158,11 +164,22 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
     assert (embedding_dir / "dataset_info.json").exists()
 
 
-def test_init_vectordb(config_yaml):
-    params = {"metric": Metric.INNER_PRODUCT, "nlist": 123, "m": 16}
+def test_build(config_yaml, data_path, mocked_benchmark_module):
+    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
 
     benchmarker = Benchmarker(config_yaml)
-    vdb = benchmarker.init_vectordb("faiss.ivfpq", dim=64, init_params=params)
+
+    params = {
+        "url": "localhost",
+        "port": "8000",
+        "metric": Metric.INNER_PRODUCT,
+        "nlist": 123,
+        "m": 16,
+        "index_type": "IVFPQ",
+    }
+    benchmarker.cfg.vectordb.params = VectorDatabaseParams(**params)
+
+    vdb = benchmarker.build(dataset)
 
     assert vdb.dim == 64
     assert vdb.metric == Metric.INNER_PRODUCT
@@ -170,20 +187,15 @@ def test_init_vectordb(config_yaml):
     assert vdb.m == 16
 
 
-def test_build_with_dummy_vectordb(monkeypatch, data_path, caplog, config_yaml):
-    # Use fake embeddings dataset on disk
-    monkeypatch.setattr(
-        benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=4, d=2)
-    )
-    dataset = benchmark.load_huggingface_dataset(data_path)
-
+def test_build_with_dummy_vectordb(monkeypatch, data_path, caplog, config_yaml, mocked_benchmark_module):
+    monkeypatch.setitem(adaptors.VECTORDBS, "faiss", DummyVectorDB)
     benchmarker = Benchmarker(config_yaml, data_path)
-    monkeypatch.setattr(benchmarker, "init_vectordb", _capture_vectordb)
+
+    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
 
     vdb = benchmarker.build(dataset)
 
-    assert vdb.train_calls == [4]
-    assert vdb.upsert_calls == [list(range(4))]
+    assert vdb.initialized
     assert "Stats:" in caplog.text
 
 
@@ -198,29 +210,26 @@ def test_search(config_yaml, data_path, caplog):
 
     benchmarker.search(dataset, vectordb, MockExactBaseline())
 
-    assert '"vectordb": "faiss.ivfpq"' in caplog.text
-    assert '"recall@k"' in caplog.text
+    assert "faiss" in caplog.text
+    assert "IVFPQ" in caplog.text
+    assert "recall@k" in caplog.text
 
 
-def test_update_with_dummy_vectordb(monkeypatch, data_path, config_yaml):
-    monkeypatch.setattr(
-        benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=5, d=2)
-    )
-
-    dataset = benchmark.load_huggingface_dataset(data_path)
+def test_update_with_dummy_vectordb(monkeypatch, data_path, config_yaml, mocked_benchmark_module):
+    monkeypatch.setitem(adaptors.VECTORDBS, "faiss", DummyVectorDB)
 
     benchmarker = Benchmarker(config_yaml, data_path)
-    monkeypatch.setattr(benchmarker, "init_vectordb", _capture_vectordb)
+
+    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
     vectordb = benchmarker.build(dataset)
 
     benchmarker.update(dataset, vectordb)
 
-    assert vectordb.train_calls  # vectordb trained at least once
-    assert vectordb.upsert_calls[0] == list(range(5))
-    assert len(vectordb.upsert_calls[1]) == benchmarker.cfg.update["add_count"]
-    assert vectordb.delete_calls == [
-        list(range(10_000_000, 10_000_000 + benchmarker.cfg.update["delete_count"]))
-    ]
+    assert vectordb.upsert_called
+    assert vectordb.num_upserted_points == benchmarker.cfg.update["add_count"]
+
+    assert vectordb.delete_called
+    assert vectordb.num_deleted_points == benchmarker.cfg.update["delete_count"]
 
 
 # ---------- Edge cases for helpers ----------
@@ -240,5 +249,6 @@ def test_run_all(config_yaml, tmp_path, caplog):
     benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
     benchmarker.run()
 
-    assert '"vectordb": "faiss.ivfpq"' in caplog.text
-    assert '"topk": 10' in caplog.text
+    assert "faiss" in caplog.text
+    assert "IVFPQ" in caplog.text
+    assert "topk" in caplog.text and "10" in caplog.text

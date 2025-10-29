@@ -9,10 +9,12 @@ import docker
 import numpy as np
 import pytest
 import requests
+from datasets import Dataset
 from docker.errors import APIError, DockerException
 
+from inatinqperf.adaptors.base import DataPoint, Query
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.weaviate_adaptor import Weaviate
-from inatinqperf.adaptors.metric import Metric
 
 # Mark these as integration tests and skip if Docker is unavailable.
 
@@ -40,7 +42,7 @@ BASE_URL = "http://localhost:8080"
 WEAVIATE_IMAGE = "semitechnologies/weaviate:1.31.16-ab5cb66.arm64"
 # Minimal command to expose the HTTP interface on localhost:8080.
 WEAVIATE_COMMAND = ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
-# Environment matches the configuration we document for end-to-end runs.
+# Environment mirrors the configuration used during benchmark runs.
 WEAVIATE_ENVIRONMENT = {
     "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true",
     "ENABLE_MODULES": "",
@@ -115,13 +117,29 @@ def class_name_fixture() -> str:
     return f"{prefix}{suffix}"
 
 
+def make_dataset(dim: int) -> Dataset:
+    """Create a simple dataset placeholder with the desired dimensionality."""
+
+    return Dataset.from_dict({"embedding": [[0.0] * dim]})
+
+
+def to_datapoints(ids: np.ndarray, vectors: np.ndarray) -> list[DataPoint]:
+    """Convert arrays of ids and vectors into DataPoint instances."""
+
+    return [
+        DataPoint(id=int(identifier), vector=vector.tolist(), metadata={})
+        for identifier, vector in zip(ids, vectors, strict=False)
+    ]
+
+
 def test_weaviate_adaptor_lifecycle(class_name: str):
     """Exercise the full lifecycle against a live Weaviate instance."""
-    adaptor = Weaviate(dim=4, metric=Metric.COSINE, base_url=BASE_URL, class_name=class_name)
+    adaptor = Weaviate(
+        dataset=make_dataset(4), metric=Metric.COSINE, url=BASE_URL, collection_name=class_name
+    )
     adaptor.drop_index()  # ensure clean start
 
-    train = np.random.default_rng(7).standard_normal((8, 4)).astype(np.float32)
-    adaptor.train_index(train)
+    adaptor._ensure_schema_exists()
 
     ids = np.arange(100, 104, dtype=np.int64)
     vectors = np.array(
@@ -133,63 +151,108 @@ def test_weaviate_adaptor_lifecycle(class_name: str):
         ],
         dtype=np.float32,
     )
-    adaptor.upsert(ids, vectors)
+    adaptor.upsert(to_datapoints(ids, vectors))
 
-    stats = adaptor.stats()  # confirm aggregation reflects inserted objects
+    stats = adaptor.stats()  # GraphQL Aggregate meta-count
     assert stats["ntotal"] == len(ids)
     assert stats["class_name"] == class_name
 
-    query = np.array([[1.0, 0.1, 0.0, 0.0]], dtype=np.float32)
-    distances, found_ids = adaptor.search(query, topk=3)
-    assert distances.shape == (1, 3)
-    assert found_ids.shape == (1, 3)
-    assert int(found_ids[0, 0]) == 100
+    query = Query(vector=[1.0, 0.1, 0.0, 0.0])
+    results = adaptor.search(query, topk=3)  # GraphQL nearVector search
+    assert len(results) == 3
+    assert results[0].id == 100
 
-    adaptor.delete([100, 999])
+    adaptor.delete([100, 999])  # data_object.delete
+    expected_total = len(ids) - 1
+    deadline = time.time() + 10.0
     stats_after_delete = adaptor.stats()
-    assert stats_after_delete["ntotal"] == len(ids) - 1
+    while stats_after_delete["ntotal"] != expected_total and time.time() < deadline:
+        time.sleep(0.5)
+        stats_after_delete = adaptor.stats()
+    assert stats_after_delete["ntotal"] == expected_total
 
     adaptor.drop_index()
 
 
 def test_weaviate_upsert_replaces_vectors(class_name: str):
     """Verify upsert overwrites existing vectors rather than duplicating them."""
-    adaptor = Weaviate(dim=3, metric=Metric.COSINE, base_url=BASE_URL, class_name=class_name)
+    adaptor = Weaviate(
+        dataset=make_dataset(3), metric=Metric.COSINE, url=BASE_URL, collection_name=class_name
+    )
     # Drop any leftover schema, then create a fresh one for the test.
     adaptor.drop_index()
-    adaptor.train_index(np.zeros((1, 3), dtype=np.float32))
+    adaptor._ensure_schema_exists()
 
     ids = np.array([1, 2], dtype=np.int64)
     first = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
-    adaptor.upsert(ids, first)
+    adaptor.upsert(to_datapoints(ids, first))
     second = first + 0.5
-    adaptor.upsert(ids, second)
+    adaptor.upsert(to_datapoints(ids, second))
 
-    stats = adaptor.stats()
+    stats = adaptor.stats()  # Aggregate meta count after replacement
     assert stats["ntotal"] == len(ids)
 
     # Ensure subsequent search surfaces the updated vectors (id=2 closer to query)
-    query = np.array([[0.0, 1.0, 0.5]], dtype=np.float32)
-    distances, found_ids = adaptor.search(query, topk=2)
-    assert found_ids[0, 0] == 2
+    query = Query(vector=[0.0, 1.0, 0.5])
+    results = adaptor.search(query, topk=2)
+    assert results[0].id == 2
 
     adaptor.drop_index()
 
 
 def test_weaviate_metric_mapping(class_name: str):
     """Confirm metric names map to Weaviate's expected distance types."""
-    adaptor = Weaviate(dim=2, metric=Metric.INNER_PRODUCT, base_url=BASE_URL, class_name=class_name)
-    adaptor.drop_index()
-    adaptor.train_index(np.zeros((1, 2), dtype=np.float32))
 
     ids = np.array([10, 11], dtype=np.int64)
     vectors = np.array([[1.0, 0.0], [0.5, 0.5]], dtype=np.float32)
-    adaptor.upsert(ids, vectors)
 
-    query = np.array([[0.6, 0.4]], dtype=np.float32)
-    distances, found_ids = adaptor.search(query, topk=2)
-    assert distances.shape == (1, 2)
-    assert found_ids.shape == (1, 2)
-    assert set(found_ids[0]) == {10, 11}
+    for metric, expected in (
+        (Metric.INNER_PRODUCT, "dot"),
+        (Metric.COSINE, "cosine"),
+        (Metric.L2, "l2-squared"),
+    ):
+        adaptor = Weaviate(
+            dataset=make_dataset(2),
+            metric=metric,
+            url=BASE_URL,
+            collection_name=f"{class_name}{metric.value.title()}",
+            index_type="hnsw",
+        )
+        adaptor.drop_index()
+        adaptor._ensure_schema_exists()
+
+        schema = adaptor._client.schema.get()
+        classes = {entry["class"]: entry for entry in schema.get("classes", [])}
+        current = classes.get(adaptor.collection_name, {})
+        assert current.get("vectorIndexType") == "hnsw"
+
+        adaptor.upsert(to_datapoints(ids, vectors))
+
+        query = Query(vector=[0.6, 0.4])
+        results = adaptor.search(query, topk=2)
+        assert len(results) == 2
+        assert set(result.id for result in results) == {10, 11}
+
+        adaptor.drop_index()
+
+
+@pytest.mark.parametrize("index_type, expected", [(None, "hnsw"), ("flat", "flat")])
+def test_weaviate_index_types(class_name: str, index_type: str | None, expected: str) -> None:
+    """Ensure requested index types are persisted when the schema is created."""
+
+    adaptor = Weaviate(
+        dataset=make_dataset(2),
+        metric=Metric.COSINE,
+        url=BASE_URL,
+        collection_name=f"{class_name}Idx",
+        index_type=index_type,
+    )
+    adaptor.drop_index()
+    adaptor._ensure_schema_exists()
+
+    schema = adaptor._client.schema.get()
+    classes = {entry["class"]: entry for entry in schema.get("classes", [])}
+    payload = classes.get(adaptor.collection_name, {})
+    assert payload.get("vectorIndexType") == expected
 
     adaptor.drop_index()

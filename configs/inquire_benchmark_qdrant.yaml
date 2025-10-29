@@ -9,15 +9,23 @@ embedding:
   batch_size: 64
   directory: data/inquire_benchmark/emb
 
+containers:
+  - image: "qdrant/qdrant:latest"
+    ports:
+      "6333": "6333"
+    healthcheck: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
+
 vectordb:
-  type: faiss
+  type: qdrant.hnsw
   params:
-    metric: ip
-    index_type: IVFPQ
-    nlist: 32768
+    url: localhost
+    port: "6333"
+    collection_name: benchmark
+    index_type: hnsw
+    metric: cosine
     m: 64
-    nbits: 8
-    nprobe: 32
+    ef: 32
+    batch_size: 1000
 
 search:
   topk: 10

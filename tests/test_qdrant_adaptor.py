@@ -21,7 +21,6 @@ def container_fixture():
             "test": "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1",
             "interval": 30 * 10**9,
             "timeout": 20 * 10**9,
-            "start_period": 30 * 10**9,
             "retries": 3,
         },
     )

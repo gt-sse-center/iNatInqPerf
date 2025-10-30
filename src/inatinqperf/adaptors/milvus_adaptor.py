@@ -33,7 +33,7 @@ class MilvusIndexType(IndexTypeBase):
 class Milvus(VectorDatabase):
     """Adaptor to help work with Milvus vector database."""
 
-    @logger.catch
+    @logger.catch(reraise=True)
     def __init__(
         self,
         dataset: HuggingFaceDataset,

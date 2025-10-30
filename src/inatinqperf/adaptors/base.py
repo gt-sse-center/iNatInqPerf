@@ -35,31 +35,40 @@ class SearchResult:
     """
 
     id: int
-    score: int
+    score: float
 
 
 class VectorDatabase(ABC):
-    """Abstract base class for a vector database."""
+    """Abstract base class for an adaptor to a vector database.
+
+    This class serves as the base class for wrappers around a vector database client,
+    providing a clean and consistent interface which can be used by the benchmarking code.
+    """
 
     @abstractmethod
     def __init__(
         self,
         dataset: HuggingFaceDataset,
-        metric: str,
+        metric: str | Metric,
         *args,
         **kwargs,
     ) -> None:
-        """Constructor for the vector database.
+        """Constructor for the vector database adaptor.
 
         Args:
             dataset (HuggingFaceDataset): The dataset which to load to the database.
-            metric (str): The distance/similarity metric to use for the vector database.
+            metric (str | Metric): The distance/similarity metric to use for the vector database.
             *args (Sequence[object]): Optional positional arguments.
             **kwargs (dict[object, object]): Optional key-word arguments.
         """
         # Will raise exception if `metric` is not valid.
         self.metric = Metric(metric)
         self.dim = np.asarray(dataset["embedding"]).shape[1]
+
+    @staticmethod
+    @abstractmethod
+    def _translate_metric(metric: Metric) -> str:
+        """Map the metric value to a string value which is used by the vector database client."""
 
     @abstractmethod
     def upsert(self, x: Sequence[DataPoint]) -> None:

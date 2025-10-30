@@ -60,6 +60,11 @@ class Faiss(VectorDatabase):
             )
 
     @staticmethod
+    def _translate_metric(metric: Metric) -> str:
+        """Map the metric value to a string value which is used by the FAISS client."""
+        return metric.value
+
+    @staticmethod
     def _translate_index_type(index_type: str) -> FaissIndexType:
         """Return the proper FaissIndexType enum."""
         if index_type.lower() == "flat":

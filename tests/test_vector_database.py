@@ -27,7 +27,7 @@ def test_partial_implementation_rejected():
         _ = Partial()  # type: ignore[abstract]
 
 
-class DummyVectorDatabase(VectorDatabase):
+class ConcreteVectorDatabase(VectorDatabase):
     """
     A minimal concrete vector database for exercising the VectorDatabase contract.
     Implements brute-force search in-memory to validate shapes & lifecycle.
@@ -41,11 +41,15 @@ class DummyVectorDatabase(VectorDatabase):
 
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
-        self._metric = metric.lower()
+        self._metric = self._translate_metric(metric)
 
         # "Upsert" dataset
         self._X = dataset["embedding"]
         self._ids = dataset["id"]
+
+    @staticmethod
+    def _translate_metric(metric: Metric) -> str:
+        return metric.lower()
 
     def train_index(self, x_train: np.ndarray):
         # Should be a no-op for this dummy; just validate dims
@@ -127,7 +131,7 @@ def tiny_dataset_fixture():
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
 def test_lifecycle_and_shapes(metric, tiny_dataset):
-    db = DummyVectorDatabase(tiny_dataset, metric=metric)
+    db = ConcreteVectorDatabase(tiny_dataset, metric=metric)
 
     # search with two queries
     q = Query([1.0, 0.0])
@@ -153,8 +157,19 @@ def test_lifecycle_and_shapes(metric, tiny_dataset):
     assert st2["ntotal"] == 2
 
 
+def test_invalid_delete(tiny_dataset):
+    db = ConcreteVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
+
+    # id=101 does not exist in tiny_dataset.
+    db.delete([101])
+
+    # There should be no change in the size of the database.
+    st = db.stats()
+    assert st["ntotal"] == 4
+
+
 def test_upsert_replaces_existing(tiny_dataset):
-    db = DummyVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
+    db = ConcreteVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
 
     # Upsert same ids with shifted vectors
     tiny_dataset = tiny_dataset.with_format("numpy")
@@ -171,7 +186,3 @@ def test_upsert_replaces_existing(tiny_dataset):
     q = Query([2.0, 1.0])
     results = db.search(q, topk=1)
     assert len(results) == 1
-
-    # With IP and shifted vectors, id 12 ([2,2]) should be the best match
-    # assert I[0, 0] in ids
-    print(results)

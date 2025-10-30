@@ -2,12 +2,11 @@
 
 import numpy as np
 import pytest
-import requests
 from collections.abc import Sequence
-from datasets import Dataset
+from datasets import Dataset as HuggingFaceDataset
 
 from inatinqperf import adaptors
-from inatinqperf.adaptors.base import DataPoint, SearchResult, VectorDatabase
+from inatinqperf.adaptors.base import SearchResult
 from inatinqperf.adaptors.enums import Metric
 from inatinqperf.benchmark import Benchmarker, benchmark
 from inatinqperf.benchmark.configuration import VectorDatabaseParams
@@ -23,45 +22,35 @@ def data_path_fixture(tmp_path_factory):
     return tmp_path_factory.mktemp("data")
 
 
-# ---------- Helpers / fixtures ----------
-def _fake_ds_embeddings(n=5, d=4):
-    rng = np.random.default_rng(42)
-    return {"embedding": [rng.uniform(0, 100, d).astype(np.float32) for _ in range(n)], "id": list(range(n))}
+@pytest.fixture(name="vector_database_params")
+def vdb_params_fixture():
+    params = {
+        "url": "localhost",
+        "port": "8000",
+        "metric": Metric.INNER_PRODUCT,
+        "nlist": 123,
+        "m": 16,
+        "index_type": "IVFPQ",
+    }
+    return params
 
 
-class DummyVectorDB(VectorDatabase):
-    """A dummy vector database for mocking."""
-
-    def __init__(self, dataset, metric=Metric.INNER_PRODUCT, **params):
-        self.metric = metric
-        self.params = params
-        self.ntotal = 0
-
-        self.initialized = True
-
-        self.upsert_called = False
-        self.num_upserted_points = 0
-
-        self.delete_called = False
-        self.num_deleted_points = 0
-
-    def upsert(self, x: Sequence[DataPoint]):
-        self.upsert_called = True
-        self.num_upserted_points = len(x)
-
-    def search(self, q, topk, **kwargs):
-        return [SearchResult(id=i, score=0) for i in np.arange(topk)]
-
-    def delete(self, ids):
-        self.delete_called = True
-        self.num_deleted_points = len(ids)
-
-    def stats(self):
-        return {
-            "ntotal": self.ntotal,
-            "kind": "dummy",
-            "metric": str(getattr(self, "metric", "ip")),
+@pytest.fixture(name="benchmark_module")
+def mocked_benchmark_module(monkeypatch):
+    def _fake_ds_embeddings(path=None, splits=None):
+        n = 9984
+        d = 64
+        rng = np.random.default_rng(42)
+        data_dict = {
+            "id": list(range(n)),
+            "embedding": [rng.uniform(0, 100, d).astype(np.float32) for _ in range(n)],
         }
+
+        return HuggingFaceDataset.from_dict(data_dict)
+
+    # patch benchmark.load_huggingface_dataset
+    monkeypatch.setattr(benchmark, "load_huggingface_dataset", _fake_ds_embeddings)
+    return benchmark
 
 
 class MockExactBaseline:
@@ -71,15 +60,6 @@ class MockExactBaseline:
         ids = np.arange(k)
         scores = np.zeros_like(ids, dtype=np.float32)
         return [SearchResult(id=i, score=score) for i, score in zip(ids, scores)]
-
-
-@pytest.fixture(name="mocked_benchmark_module")
-def mocked_benchmark_fixture(monkeypatch):
-    # Use fake embeddings dataset on disk
-    monkeypatch.setattr(
-        benchmark, "load_huggingface_dataset", lambda path=None: _fake_ds_embeddings(n=9984, d=64)
-    )
-    return benchmark
 
 
 def test_load_cfg(config_yaml, data_path):
@@ -142,7 +122,7 @@ def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
     # Create the embedding directory
     (tmp_path / benchmarker.cfg.embedding.directory).mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(Dataset, "load_from_disk", lambda *args, **kwargs: None)
+    monkeypatch.setattr(HuggingFaceDataset, "load_from_disk", lambda *args, **kwargs: None)
 
     benchmarker.embed()
 
@@ -164,20 +144,12 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
     assert (embedding_dir / "dataset_info.json").exists()
 
 
-def test_build(config_yaml, data_path, mocked_benchmark_module):
-    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
+def test_build(config_yaml, data_path, benchmark_module, vector_database_params):
+    dataset = benchmark_module.load_huggingface_dataset(data_path)
 
     benchmarker = Benchmarker(config_yaml)
 
-    params = {
-        "url": "localhost",
-        "port": "8000",
-        "metric": Metric.INNER_PRODUCT,
-        "nlist": 123,
-        "m": 16,
-        "index_type": "IVFPQ",
-    }
-    benchmarker.cfg.vectordb.params = VectorDatabaseParams(**params)
+    benchmarker.cfg.vectordb.params = VectorDatabaseParams(**vector_database_params)
 
     vdb = benchmarker.build(dataset)
 
@@ -187,15 +159,12 @@ def test_build(config_yaml, data_path, mocked_benchmark_module):
     assert vdb.m == 16
 
 
-def test_build_with_dummy_vectordb(monkeypatch, data_path, caplog, config_yaml, mocked_benchmark_module):
-    monkeypatch.setitem(adaptors.VECTORDBS, "faiss", DummyVectorDB)
+def test_build_with_faiss(data_path, caplog, config_yaml, benchmark_module):
+    dataset = benchmark_module.load_huggingface_dataset(data_path)
     benchmarker = Benchmarker(config_yaml, data_path)
 
-    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
-
     vdb = benchmarker.build(dataset)
-
-    assert vdb.initialized
+    assert isinstance(vdb, adaptors.Faiss)
     assert "Stats:" in caplog.text
 
 
@@ -215,21 +184,20 @@ def test_search(config_yaml, data_path, caplog):
     assert "recall@k" in caplog.text
 
 
-def test_update_with_dummy_vectordb(monkeypatch, data_path, config_yaml, mocked_benchmark_module):
-    monkeypatch.setitem(adaptors.VECTORDBS, "faiss", DummyVectorDB)
-
+def test_update(data_path, config_yaml, benchmark_module):
+    dataset = benchmark_module.load_huggingface_dataset(data_path)
     benchmarker = Benchmarker(config_yaml, data_path)
 
-    dataset = mocked_benchmark_module.load_huggingface_dataset(data_path)
     vectordb = benchmarker.build(dataset)
+
+    previous_total = vectordb.index.ntotal
 
     benchmarker.update(dataset, vectordb)
 
-    assert vectordb.upsert_called
-    assert vectordb.num_upserted_points == benchmarker.cfg.update["add_count"]
-
-    assert vectordb.delete_called
-    assert vectordb.num_deleted_points == benchmarker.cfg.update["delete_count"]
+    assert (
+        vectordb.index.ntotal
+        == previous_total + benchmarker.cfg.update["add_count"] - benchmarker.cfg.update["delete_count"]
+    )
 
 
 # ---------- Edge cases for helpers ----------

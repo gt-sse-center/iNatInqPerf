@@ -129,7 +129,6 @@ def container_fixture(etcd_container, minio_container, milvus_network):
         healthcheck={
             "test": ["CMD", "curl", "-f", "http://localhost:9091/healthz"],
             "interval": 30 * 10**9,
-            "start_period": 90 * 10**9,
             "timeout": 20 * 10**9,
             "retries": 3,
         },

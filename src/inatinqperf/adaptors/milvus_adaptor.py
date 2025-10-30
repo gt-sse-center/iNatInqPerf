@@ -60,7 +60,6 @@ class Milvus(VectorDatabase):
             logger.exception("Milvus server is not running or connection failed")
 
         self.client = MilvusClient(uri=f"http://{url}:{port}")
-        self.metric = self._translate_metric(metric)
 
         # Remove collection if it already exists
         if self.client.has_collection(self.collection_name):
@@ -89,7 +88,7 @@ class Milvus(VectorDatabase):
             field_name="vector",
             index_type=self.index_type.value,
             index_name=self.index_name,
-            metric_type=self.metric,
+            metric_type=self._translate_metric(self.metric),
             params=index_params if index_params else {},
         )
 
@@ -145,16 +144,20 @@ class Milvus(VectorDatabase):
             anns_field="vector",
             data=[q.vector],
             limit=topk,
-            search_params={"metric_type": self.metric},
+            search_params={
+                "metric_type": self._translate_metric(self.metric),
+            },
         )
 
         search_results = []
 
-        for result in results:
-            hit_ids = result.ids
-            hit_distances = result.distances
-            for hit_id, hit_distance in zip(hit_ids, hit_distances):
-                search_results.append(SearchResult(id=hit_id, score=hit_distance))
+        # `results` should only have a single value
+        result = results[0]
+
+        hit_ids = result.ids
+        hit_distances = result.distances
+        for hit_id, hit_distance in zip(hit_ids, hit_distances):
+            search_results.append(SearchResult(id=hit_id, score=hit_distance))
 
         return search_results
 

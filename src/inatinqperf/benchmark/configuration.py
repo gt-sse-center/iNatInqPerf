@@ -67,6 +67,7 @@ class SearchParams(BaseModel):
 class ContainerConfig(BaseModel):
     """Configuration for setting up a docker container of the vector database."""
 
+    name: NonEmptyStr | None = None
     image: NonEmptyStr
     ports: dict[str, str]
     healthcheck: NonEmptyStr

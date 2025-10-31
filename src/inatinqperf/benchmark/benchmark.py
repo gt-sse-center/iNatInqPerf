@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.utils import Profiler, get_table
@@ -46,6 +47,7 @@ class Benchmarker:
             self.base_path = Path(__file__).resolve().parent.parent
         else:
             self.base_path = base_path
+        self.container_configs = list(self.cfg.containers or [])
 
     def download(self) -> None:
         """Download HF dataset and optionally export images."""
@@ -61,7 +63,10 @@ class Benchmarker:
         export_raw_images = self.cfg.dataset.export_images
         splits = self.cfg.dataset.splits
 
-        with Profiler(f"download-{dataset_id.split('/')[-1]}-{splits}"):
+        with Profiler(
+            f"download-{dataset_id.split('/')[-1]}-{splits}",
+            containers=self.container_configs,
+        ):
             ds = load_huggingface_dataset(dataset_id, splits)
             ds.save_to_disk(dataset_dir)
 
@@ -87,7 +92,7 @@ class Benchmarker:
         dataset_dir = self.base_path / self.cfg.dataset.directory
         logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
-        with Profiler("embed-images"):
+        with Profiler("embed-images", containers=self.container_configs):
             dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
 
         return self.save_as_huggingface_dataset(dse, embeddings_dir=embeddings_dir)
@@ -117,14 +122,62 @@ class Benchmarker:
         vdb_type = self.cfg.vectordb.type
         logger.info(f"Building {vdb_type} vector database")
 
+        vectordb_cls = self._resolve_vectordb_class(vdb_type)
         init_params = self.cfg.vectordb.params.to_dict()
+        metric_value = init_params.pop("metric", None)
 
-        with Profiler(f"build-{vdb_type}"):
-            vdb = VECTORDBS[vdb_type](dataset, **init_params)
+        if metric_value is None:
+            msg = "Vector database metric must be specified in the configuration."
+            raise ValueError(msg)
+
+        metric = metric_value if isinstance(metric_value, Metric) else Metric(metric_value)
+
+        with Profiler(f"build-{vdb_type}", containers=self.container_configs):
+            vdb = vectordb_cls(dataset=dataset, metric=metric, **init_params)
+
+            index = getattr(vdb, "index", None)
+            index_size = getattr(index, "ntotal", None) if index is not None else None
+
+            if index_size == 0:
+                data_points = self._dataset_to_datapoints(dataset)
+                if data_points:
+                    vdb.upsert(data_points)
 
         logger.info(f"Stats: {vdb.stats()}")
 
         return vdb
+
+    @staticmethod
+    def _resolve_vectordb_class(vdb_type: str) -> type[VectorDatabase]:
+        """Return the adaptor class associated with `vdb_type`."""
+        key = vdb_type.lower()
+        if key in VECTORDBS:
+            return VECTORDBS[key]
+
+        base_key = key.split(".", maxsplit=1)[0]
+        if base_key in VECTORDBS:
+            return VECTORDBS[base_key]
+
+        available = ", ".join(sorted(VECTORDBS))
+        msg = f"Unsupported vector database type '{vdb_type}'. Available: {available}"
+        raise ValueError(msg)
+
+    @staticmethod
+    def _dataset_to_datapoints(dataset: Dataset) -> list[DataPoint]:
+        """Convert a HuggingFace dataset to a list of DataPoint objects."""
+        if "embedding" not in dataset.column_names:
+            msg = "Dataset must contain an 'embedding' column."
+            raise ValueError(msg)
+
+        metadata_keys = [key for key in dataset.column_names if key not in {"embedding", "id"}]
+        datapoints: list[DataPoint] = []
+
+        for idx, row in enumerate(dataset):
+            row_id = row["id"] if "id" in row and row["id"] is not None else idx
+            metadata = {key: row[key] for key in metadata_keys}
+            datapoints.append(DataPoint(id=int(row_id), vector=row["embedding"], metadata=metadata))
+
+        return datapoints
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
@@ -156,7 +209,7 @@ class Benchmarker:
         logger.info("Embedded all queries")
 
         logger.info("Performing search on baseline")
-        with Profiler("search-baseline-FaissFlat") as p:
+        with Profiler("search-baseline-FaissFlat", containers=self.container_configs) as p:
             i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
             for i in tqdm(range(q.shape[0])):
                 base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
@@ -165,7 +218,7 @@ class Benchmarker:
 
         # search + profile
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
-        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
+        with Profiler(f"search-{self.cfg.vectordb.type}", containers=self.container_configs) as p:
             latencies = []
             for i in tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
@@ -208,18 +261,24 @@ class Benchmarker:
         del_n = self.cfg.update["delete_count"]
 
         x = np.asarray(dataset["embedding"], dtype=np.float32)
+        # Dataset columns may arrive as NumPy arrays; normalise to a plain list so max()
+        # doesn't trip over array truthiness (avoids ValueError about ambiguous truth value).
+        existing_raw = dataset["id"] if "id" in dataset.column_names else list(range(len(dataset)))
+        existing_ids = existing_raw.tolist() if hasattr(existing_raw, "tolist") else list(existing_raw)
+        max_existing_id = max(existing_ids) if existing_ids else -1
+        next_id = max_existing_id + 1
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)
         add_vecs = x[:add_n].copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
-        add_ids = list(range(add_n))
+        add_ids = [next_id + i for i in range(add_n)]
 
-        with Profiler(f"update-add-{vdb_type}"):
+        with Profiler(f"update-add-{vdb_type}", containers=self.container_configs):
             data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]
             vectordb.upsert(data_points)
 
-        with Profiler(f"update-delete-{vdb_type}"):
+        with Profiler(f"update-delete-{vdb_type}", containers=self.container_configs):
             del_ids = add_ids[:del_n]
             vectordb.delete(del_ids)
 
@@ -244,6 +303,16 @@ class Benchmarker:
 
         # Update operations
         self.update(dataset, vectordb)
+
+        # Gracefully release vector database resources.
+        # We are using faiss as baseline so no need to close it
+        # in future, if any database (like weaviate) is used as baseline
+        # then close it here as well
+
+        try:
+            vectordb.close()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"Failed to close vectordb '{self.cfg.vectordb.type}': {exc!s}")
 
 
 def ensure_dir(p: Path) -> Path:

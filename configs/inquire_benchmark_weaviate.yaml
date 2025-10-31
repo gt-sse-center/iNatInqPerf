@@ -9,12 +9,19 @@ embedding:
   batch_size: 64
   directory: data/inquire_benchmark/emb
 
+containers:
+  - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
+    ports:
+      "8080": "8080"
+    healthcheck: "curl -s http://localhost:8080/v1/.well-known/ready | grep -q 'true' || exit 1"
+
+
 vectordb:
   type: weaviate.hnsw
   params:
     index_type: hnsw
     metric: cosine
-    url: http://localhost:8080
+    url: http://localhost
     port: "8080"
     collection_name: Benchmark
     timeout: 10.0

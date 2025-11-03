@@ -21,7 +21,10 @@ def container_fixture():
     client = docker.from_env()
     container = client.containers.run(
         "cr.weaviate.io/semitechnologies/weaviate:1.33.2",
-        ports={"8080": "8080", "50051": "50051"},
+        ports={
+            "8080": "8080",
+            "50051": "50051",
+        },
         # Minimal command to expose the HTTP interface on localhost:8080
         command=["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"],
         # Environment mirrors the configuration used during benchmark runs.

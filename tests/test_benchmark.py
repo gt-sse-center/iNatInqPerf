@@ -110,9 +110,9 @@ def test_embed(config_yaml, data_path):
 
     ds = ds.with_format("numpy")
 
-    assert ds["embedding"].shape == (200, 512)
-    assert len(ds["id"]) == 200
-    assert len(ds["label"]) == 200
+    assert ds["embedding"].shape == (128, 512)
+    assert len(ds["id"]) == 128
+    assert len(ds["label"]) == 128
 
 
 def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):

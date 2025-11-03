@@ -145,6 +145,7 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
 
 
 def test_build(config_yaml, data_path, benchmark_module, vector_database_params):
+    # TODO (VarunA): Include the dataset as a test fixture so we're not pulling from the network each time.
     dataset = benchmark_module.load_huggingface_dataset(data_path)
 
     benchmarker = Benchmarker(config_yaml)

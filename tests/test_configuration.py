@@ -14,7 +14,7 @@ from inatinqperf.benchmark.configuration import (
 def test_dataset_config(benchmark_yaml):
     config = DatasetConfig(**benchmark_yaml["dataset"])
     assert config.dataset_id == "sagecontinuum/INQUIRE-Benchmark-small"
-    assert config.splits == "validation[0:128]"
+    assert config.splits == "validation[0:256]"
     assert config.directory == Path("data/inquire_benchmark/raw")
     assert config.export_images is True
 

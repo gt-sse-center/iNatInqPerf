@@ -1,4 +1,9 @@
-"""Weaviate adaptor using the v4 client library."""
+"""Weaviate adaptor using the v4 client library.
+
+Docs can be found here:
+- https://weaviate-python-client.readthedocs.io/en/stable/weaviate.html
+- https://docs.weaviate.io/weaviate/guides
+"""
 
 from collections.abc import Sequence
 

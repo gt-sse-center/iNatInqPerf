@@ -59,6 +59,7 @@ class Milvus(VectorDatabase):
         except Exception:
             logger.exception("Milvus server is not running or connection failed")
 
+        # NOTE: pymilvus is very slow to connect, takes ~8 seconds as per profiling.
         self.client = MilvusClient(uri=f"http://{url}:{port}")
 
         # Remove collection if it already exists

@@ -1,6 +1,6 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
-  splits: "validation[0:200]"
+  splits: "validation[0:128]"
   directory: data/inquire_benchmark/raw
   export_images: true
 

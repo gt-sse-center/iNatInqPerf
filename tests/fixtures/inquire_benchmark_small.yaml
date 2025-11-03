@@ -11,9 +11,18 @@ embedding:
 
 containers:
   - image: "qdrant/qdrant"
+    name: "qdrant"
+    hostname: "localhost"
     ports:
-      "4000": "4000"
-    healthcheck: "healthcheck test"
+      4000: 4000
+    # environment:
+    # volumes:
+    # command:
+    healthcheck:
+      test: "healthcheck test"
+      interval: 30000000000
+      timeout: 20000000000
+      retries: 3
 
 container_network: ""
 

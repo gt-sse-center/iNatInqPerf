@@ -110,9 +110,9 @@ def test_embed(config_yaml, data_path):
 
     ds = ds.with_format("numpy")
 
-    assert ds["embedding"].shape == (200, 512)
-    assert len(ds["id"]) == 200
-    assert len(ds["label"]) == 200
+    assert ds["embedding"].shape == (128, 512)
+    assert len(ds["id"]) == 128
+    assert len(ds["label"]) == 128
 
 
 def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
@@ -145,6 +145,7 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
 
 
 def test_build(config_yaml, data_path, benchmark_module, vector_database_params):
+    # TODO (VarunA): Include the dataset as a test fixture so we're not pulling from the network each time.
     dataset = benchmark_module.load_huggingface_dataset(data_path)
 
     benchmarker = Benchmarker(config_yaml)

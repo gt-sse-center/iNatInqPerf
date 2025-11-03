@@ -10,38 +10,35 @@ embedding:
   directory: data/inquire_benchmark/emb
 
 containers:
-  - image: "qdrant/qdrant"
+  - image: "qdrant/qdrant:latest"
     name: "qdrant"
     hostname: "localhost"
     ports:
-      4000: 4000
+      6333: 6333
     # environment:
     # volumes:
     # command:
     healthcheck:
-      test: "healthcheck test"
+      test: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
       interval: 30000000000
       timeout: 20000000000
       retries: 3
 
-container_network: ""
-
 vectordb:
-  type: faiss
+  type: qdrant.hnsw
   params:
     url: localhost
-    port: "8080"
-    metric: ip
-    index_type: IVFPQ
-    nlist: 32768
+    port: "6333"
+    collection_name: benchmark
+    index_type: hnsw
+    metric: cosine
     m: 64
-    nbits: 2
-    nprobe: 32
+    ef: 32
     batch_size: 1000
 
 search:
   topk: 10
-  queries_file: "benchmark/queries.txt"
+  queries_file: benchmark/queries.txt
 
 update:
   add_count: 50

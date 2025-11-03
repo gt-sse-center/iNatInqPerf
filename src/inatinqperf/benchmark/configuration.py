@@ -68,8 +68,15 @@ class ContainerConfig(BaseModel):
     """Configuration for setting up a docker container of the vector database."""
 
     image: NonEmptyStr
-    ports: dict[str, str]
-    healthcheck: NonEmptyStr
+    name: NonEmptyStr
+    hostname: str = ""
+    ports: dict[str | PositiveInt, PositiveInt]
+    environment: dict[str, str] = {}
+    volumes: list[str] = []
+    command: str | list = ""
+    security_opt: list[str] = []
+    healthcheck: dict[str, int | str | list]
+    network: str = ""
 
 
 class Config(BaseModel):
@@ -77,7 +84,8 @@ class Config(BaseModel):
 
     dataset: DatasetConfig
     embedding: EmbeddingParams
-    containers: Sequence[ContainerConfig] | None = None
+    containers: Sequence[ContainerConfig] = []
+    container_network: str = ""
     vectordb: VectorDatabaseConfig
     search: SearchParams
     update: dict[str, PositiveInt]

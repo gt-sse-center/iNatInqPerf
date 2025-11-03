@@ -1,0 +1,45 @@
+dataset:
+  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
+  splits: "validation[0:128]"
+  directory: data/inquire_benchmark/raw
+  export_images: true
+
+embedding:
+  model_id: openai/clip-vit-base-patch32
+  batch_size: 64
+  directory: data/inquire_benchmark/emb
+
+containers:
+  - image: "qdrant/qdrant:latest"
+    name: "qdrant"
+    hostname: "localhost"
+    ports:
+      6333: 6333
+    # environment:
+    # volumes:
+    # command:
+    healthcheck:
+      test: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
+      interval: 30000000000
+      timeout: 20000000000
+      retries: 3
+
+vectordb:
+  type: qdrant.hnsw
+  params:
+    url: localhost
+    port: "6333"
+    collection_name: benchmark
+    index_type: hnsw
+    metric: cosine
+    m: 64
+    ef: 32
+    batch_size: 1000
+
+search:
+  topk: 10
+  queries_file: benchmark/queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30

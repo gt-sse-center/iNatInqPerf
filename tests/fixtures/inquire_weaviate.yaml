@@ -1,0 +1,48 @@
+dataset:
+  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
+  splits: "validation[0:128]"
+  directory: data/inquire_benchmark/raw
+  export_images: true
+
+embedding:
+  model_id: openai/clip-vit-base-patch32
+  batch_size: 64
+  directory: data/inquire_benchmark/emb
+
+containers:
+  - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
+    name: "weaviate-standalone"
+    hostname: "localhost"
+    ports:
+      8080: 8080
+      50051: 50051
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      AUTOSCHEMA_ENABLED: "false"
+    volumes: ["weaviate_data:/var/lib/weaviate"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30000000000
+      timeout: 20000000000
+      retries: 3
+
+vectordb:
+  type: weaviate.hnsw
+  params:
+    url: localhost
+    port: "8080"
+    index_type: hnsw
+    collection_name: benchmark
+    metric: cosine
+    batch_size: 1000
+
+search:
+  topk: 10
+  queries_file: benchmark/queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30

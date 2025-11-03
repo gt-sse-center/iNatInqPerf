@@ -26,8 +26,8 @@ containers:
     command: "etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd"
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30000000000
-      timeout: 20000000000
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
       retries: 3
     network: "milvus"
   - image: "minio/minio:RELEASE.2024-12-18T13-15-44Z"
@@ -43,8 +43,8 @@ containers:
     command: "minio server /minio_data --console-address \":9001\""
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30000000000
-      timeout: 20000000000
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
       retries: 3
     network: "milvus"
   - image: "milvusdb/milvus:v2.6.3"
@@ -62,8 +62,8 @@ containers:
     security_opt: ["seccomp:unconfined"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 30000000000
-      timeout: 20000000000
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
       retries: 3
     network: "milvus"
 

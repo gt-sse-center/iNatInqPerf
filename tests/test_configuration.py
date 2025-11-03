@@ -14,7 +14,7 @@ from inatinqperf.benchmark.configuration import (
 def test_dataset_config(benchmark_yaml):
     config = DatasetConfig(**benchmark_yaml["dataset"])
     assert config.dataset_id == "sagecontinuum/INQUIRE-Benchmark-small"
-    assert config.splits == "validation[0:128]"
+    assert config.splits == "validation[0:200]"
     assert config.directory == Path("data/inquire_benchmark/raw")
     assert config.export_images is True
 
@@ -53,12 +53,7 @@ def test_container_config_list(benchmark_yaml):
     assert len(containers) == 1
     assert containers[0].image == "qdrant/qdrant"
     assert len(containers[0].ports) == 1
-<<<<<<< HEAD
-    assert containers[0].healthcheck == "healthcheck test"
-    assert containers[0].name is None
-=======
     assert containers[0].healthcheck["test"] == "healthcheck test"
->>>>>>> 4248845 (fixed tests)
 
 
 def test_config(benchmark_yaml):

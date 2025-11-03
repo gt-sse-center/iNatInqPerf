@@ -106,7 +106,8 @@ class Faiss(VectorDatabase):
         nbits: int,
         nprobe: int,
     ) -> faiss.Index:
-        n = np.asarray(dataset["embedding"]).shape[0]
+        embeddings = np.asarray(dataset["embedding"])
+        n = embeddings.shape[0]
 
         # Since FAISS hardcodes the minimum number
         # of clustering points to 39, we make sure
@@ -132,7 +133,7 @@ class Faiss(VectorDatabase):
         ivf = _unwrap_to_ivf(index.index)
 
         # Train the index
-        index.train(np.asarray(dataset["embedding"]))
+        index.train(embeddings)
 
         # Set nprobe (if we have IVF)
         ivf = _unwrap_to_ivf(index.index)

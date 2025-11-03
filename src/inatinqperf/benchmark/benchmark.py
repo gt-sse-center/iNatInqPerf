@@ -15,12 +15,15 @@ from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorData
 from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
-from inatinqperf.utils import Profiler, get_table
-from inatinqperf.utils.dataio import export_images, load_huggingface_dataset
-from inatinqperf.utils.embed import (
+from inatinqperf.benchmark.container import container_context
+from inatinqperf.utils import (
     ImageDatasetWithEmbeddings,
+    Profiler,
     embed_images,
     embed_text,
+    export_images,
+    get_table,
+    load_huggingface_dataset,
     to_huggingface_dataset,
 )
 
@@ -292,17 +295,18 @@ class Benchmarker:
         # Compute embeddings
         dataset = self.embed()
 
-        # Build baseline vector database
-        baseline_vectordb = self.build_baseline(dataset)
+        with container_context(self.cfg):
+            # Build baseline vector database
+            baseline_vectordb = self.build_baseline(dataset)
 
-        # Build specified vector database
-        vectordb = self.build(dataset)
+            # Build specified vector database
+            vectordb = self.build(dataset)
 
-        # Perform search
-        self.search(dataset, vectordb, baseline_vectordb)
+            # Perform search
+            self.search(dataset, vectordb, baseline_vectordb)
 
-        # Update operations
-        self.update(dataset, vectordb)
+            # Update operations
+            self.update(dataset, vectordb)
 
         # Gracefully release vector database resources.
         # We are using faiss as baseline so no need to close it

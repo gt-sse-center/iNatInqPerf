@@ -48,7 +48,7 @@ class Benchmarker:
             self.base_path = Path(__file__).resolve().parent.parent
         else:
             self.base_path = base_path
-        self.container_configs = list(self.cfg.containers or [])
+        self.container_configs = list(self.cfg.containers)
 
     def download(self) -> None:
         """Download HF dataset and optionally export images."""
@@ -138,7 +138,9 @@ class Benchmarker:
 
             index = getattr(vdb, "index", None)
             index_size = getattr(index, "ntotal", None) if index is not None else None
-
+            # The guard here is really just avoiding an unnecessary rewrite when the newly built
+            # vector DB already has its index populated; it does not exist because a repeat upsert
+            # would corrupt data, just to avoid work if nothing needs to be written.
             if index_size == 0:
                 data_points = self._dataset_to_datapoints(dataset)
                 if data_points:
@@ -151,33 +153,18 @@ class Benchmarker:
     @staticmethod
     def _resolve_vectordb_class(vdb_type: str) -> type[VectorDatabase]:
         """Return the adaptor class associated with `vdb_type`."""
-        key = vdb_type.lower()
-        if key in VECTORDBS:
-            return VECTORDBS[key]
-
-        base_key = key.split(".", maxsplit=1)[0]
-        if base_key in VECTORDBS:
-            return VECTORDBS[base_key]
-
-        available = ", ".join(sorted(VECTORDBS))
-        msg = f"Unsupported vector database type '{vdb_type}'. Available: {available}"
-        raise ValueError(msg)
+        return VECTORDBS[vdb_type.lower()]
 
     @staticmethod
     def _dataset_to_datapoints(dataset: Dataset) -> list[DataPoint]:
         """Convert a HuggingFace dataset to a list of DataPoint objects."""
-        if "embedding" not in dataset.column_names:
-            msg = "Dataset must contain an 'embedding' column."
-            raise ValueError(msg)
 
-        metadata_keys = [key for key in dataset.column_names if key not in {"embedding", "id"}]
-        metadata_columns = {key: dataset[key] for key in metadata_keys}
-
+        # TODO: add metadata info from dataset if available
         return [
             DataPoint(
                 id=int(row_id),
                 vector=vector,
-                metadata={key: metadata_columns[key][idx] for key in metadata_keys},
+                metadata={},
             )
             for idx, (row_id, vector) in enumerate(zip(dataset["id"], dataset["embedding"], strict=True))
         ]

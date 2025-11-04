@@ -61,10 +61,10 @@ def container_context(config: Config | dict) -> Generator[object]:
                 security_opt=container_cfg.security_opt,
                 healthcheck=container_cfg.healthcheck,
                 network=container_cfg.network,
-                remove=True,
                 detach=True,  # enabled so we don't block on this
             )
             containers.append(container)
+
             logger.info(f"Running container with image: {container_cfg.image}")
 
         yield containers
@@ -74,6 +74,8 @@ def container_context(config: Config | dict) -> Generator[object]:
             # Stop containers in reverse order
             for container in containers[::-1]:
                 container.stop()
+                container.remove(v=True)  # remove container along with its volumes
+
         except Exception as exc:
             logger.warning(f"Failed to stop container: {exc}")
 

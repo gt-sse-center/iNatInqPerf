@@ -157,3 +157,7 @@ class Qdrant(VectorDatabase):
             "m": self.m,
             "ef_construct": self.ef,
         }
+
+    def close(self) -> None:
+        """Close database connection."""
+        self.client.close()

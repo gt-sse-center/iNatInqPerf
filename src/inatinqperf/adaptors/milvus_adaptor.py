@@ -166,7 +166,7 @@ class Milvus(VectorDatabase):
         """Return index statistics."""
         return self.client.describe_index(collection_name=self.collection_name, index_name=self.index_name)
 
-    def teardown(self) -> None:
+    def close(self) -> None:
         """Teardown the Milvus vector database."""
         self.client.drop_collection(self.collection_name)
         self.client.close()

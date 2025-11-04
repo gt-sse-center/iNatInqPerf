@@ -191,23 +191,5 @@ class Weaviate(VectorDatabase):
         }
 
     def close(self) -> None:
-        """Close the underlying Weaviate client connection.
-
-        The adaptor opens a persistent HTTP/gRPC client; calling `close()` releases sockets so
-        repeated benchmarks/tests do not leak ports or trigger ResourceWarnings and Docker
-        networking conflicts.
-        """
-        client = getattr(self, "client", None)
-        if client is None:
-            return
-        try:
-            client.close()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Failed to close Weaviate client cleanly: {}", exc)
-        finally:
-            self.client = None
-
-    def __del__(self) -> None:  # pragma: no cover - best effort cleanup
-        # Destructors run during interpreter shutdown; suppress errors to avoid noisy warnings.
-        with suppress(Exception):
-            self.close()
+        """Close database connection."""
+        self.client.close()

@@ -32,7 +32,7 @@ containers:
 vectordb:
   type: weaviate.hnsw
   params:
-    url: localhost
+    url: http://localhost # needs the http[s]
     port: "8080"
     index_type: hnsw
     collection_name: benchmark
@@ -42,6 +42,7 @@ vectordb:
 search:
   topk: 10
   queries_file: benchmark/queries.txt
+  limit: 100
 
 update:
   add_count: 50

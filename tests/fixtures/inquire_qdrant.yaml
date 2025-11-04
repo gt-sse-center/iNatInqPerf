@@ -40,6 +40,7 @@ vectordb:
 search:
   topk: 10
   queries_file: benchmark/queries.txt
+  limit: 100
 
 update:
   add_count: 50

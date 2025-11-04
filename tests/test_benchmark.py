@@ -30,6 +30,8 @@ def vdb_params_fixture():
         "metric": Metric.INNER_PRODUCT,
         "nlist": 123,
         "m": 16,
+        "nbits": 2,  # This decides the number of clusters in PQ
+        "nprobe": 2,
         "index_type": "IVFPQ",
     }
     return params
@@ -38,7 +40,7 @@ def vdb_params_fixture():
 @pytest.fixture(name="benchmark_module")
 def mocked_benchmark_module(monkeypatch):
     def _fake_ds_embeddings(path=None, splits=None):
-        n = 9984
+        n = 256
         d = 64
         rng = np.random.default_rng(42)
         data_dict = {
@@ -110,9 +112,9 @@ def test_embed(config_yaml, data_path):
 
     ds = ds.with_format("numpy")
 
-    assert ds["embedding"].shape == (128, 512)
-    assert len(ds["id"]) == 128
-    assert len(ds["label"]) == 128
+    assert ds["embedding"].shape == (256, 512)
+    assert len(ds["id"]) == 256
+    assert len(ds["label"]) == 256
 
 
 def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
@@ -145,7 +147,6 @@ def test_save_as_huggingface_dataset(config_yaml, tmp_path):
 
 
 def test_build(config_yaml, data_path, benchmark_module, vector_database_params):
-    # TODO (VarunA): Include the dataset as a test fixture so we're not pulling from the network each time.
     dataset = benchmark_module.load_huggingface_dataset(data_path)
 
     benchmarker = Benchmarker(config_yaml)
@@ -158,6 +159,8 @@ def test_build(config_yaml, data_path, benchmark_module, vector_database_params)
     assert vdb.metric == Metric.INNER_PRODUCT
     assert vdb.nlist == 123
     assert vdb.m == 16
+    assert vdb.nbits == 2
+    assert vdb.nprobe == 2
 
 
 def test_build_with_faiss(data_path, caplog, config_yaml, benchmark_module):

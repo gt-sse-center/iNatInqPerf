@@ -1,6 +1,6 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
-  splits: "validation[0:128]"
+  splits: "validation[0:256]"
   directory: data/inquire_benchmark/raw
   export_images: true
 
@@ -25,8 +25,8 @@ containers:
     command: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
-      interval: 30000000000
-      timeout: 20000000000
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
       retries: 3
 
 vectordb:

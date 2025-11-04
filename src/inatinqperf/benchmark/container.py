@@ -51,7 +51,7 @@ def container_context(config: Config | dict) -> Generator[object]:
                 continue
 
             container = client.containers.run(
-                container_cfg.image,
+                image=container_cfg.image,
                 name=container_cfg.name,
                 hostname=container_cfg.hostname,
                 ports=container_cfg.ports,
@@ -65,6 +65,7 @@ def container_context(config: Config | dict) -> Generator[object]:
                 detach=True,  # enabled so we don't block on this
             )
             containers.append(container)
+
             logger.info(f"Running container with image: {container_cfg.image}")
 
         yield containers
@@ -74,6 +75,7 @@ def container_context(config: Config | dict) -> Generator[object]:
             # Stop containers in reverse order
             for container in containers[::-1]:
                 container.stop()
+
         except Exception as exc:
             logger.warning(f"Failed to stop container: {exc}")
 
@@ -82,6 +84,3 @@ def container_context(config: Config | dict) -> Generator[object]:
             network.remove()
 
         client.close()
-
-
-# with container_context(self.cfg):

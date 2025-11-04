@@ -1,6 +1,6 @@
 """Unit tests for the container utils."""
 
-from inatinqperf.container import container_context
+from inatinqperf.benchmark.container import container_context
 
 
 def test_milvus_container(milvus_yaml):

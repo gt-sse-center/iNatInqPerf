@@ -1,6 +1,6 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
-  splits: "validation[0:128]"
+  splits: "validation[0:256]"
   directory: data/inquire_benchmark/raw
   export_images: true
 
@@ -11,7 +11,7 @@ embedding:
 
 containers:
   - image: "qdrant/qdrant"
-    name: "qdrant"
+    name: "test_qdrant"
     hostname: "localhost"
     ports:
       4000: 4000
@@ -20,8 +20,8 @@ containers:
     # command:
     healthcheck:
       test: "healthcheck test"
-      interval: 30000000000
-      timeout: 20000000000
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
       retries: 3
 
 container_network: ""
@@ -34,9 +34,9 @@ vectordb:
     metric: ip
     index_type: IVFPQ
     nlist: 32768
-    m: 64
+    m: 16  #64
     nbits: 2
-    nprobe: 32
+    nprobe: 4  #32
     batch_size: 1000
 
 search:

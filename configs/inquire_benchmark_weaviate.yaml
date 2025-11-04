@@ -9,12 +9,32 @@ embedding:
   batch_size: 64
   directory: data/inquire_benchmark/emb
 
+containers:
+  - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
+    name: "weaviate-standalone"
+    hostname: "localhost"
+    ports:
+      8080: 8080
+      50051: 50051
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      AUTOSCHEMA_ENABLED: "false"
+    volumes: ["weaviate_data:/var/lib/weaviate"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
+      retries: 3
+
 vectordb:
   type: weaviate.hnsw
   params:
     index_type: hnsw
     metric: cosine
-    url: http://localhost:8080
+    url: http://localhost
     port: "8080"
     collection_name: Benchmark
     timeout: 10.0

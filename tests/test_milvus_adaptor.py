@@ -185,15 +185,12 @@ def vectordb_fixture(dataset):
         metric=Metric.L2,
         index_type=MilvusIndexType.IVF_FLAT,
         index_params=index_params[MilvusIndexType.IVF_FLAT],
-        host="localhost",
     )
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
     vectordb.client.flush(collection_name=vectordb.collection_name)
 
     yield vectordb
-
-    vectordb.teardown()
 
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.COSINE, Metric.L2])
@@ -215,15 +212,12 @@ def test_constructor(dataset, metric, index_type):
         metric=metric,
         index_type=index_type,
         index_params=index_params[index_type],
-        host="localhost",
     )
 
     # NOTE: this typically happens automatically when upserting, but we'll do it explicitly for testing purposes
     vectordb.client.flush(collection_name=vectordb.collection_name)
 
     assert vectordb.client.has_collection(vectordb.collection_name)
-
-    vectordb.teardown()
 
 
 def test_upsert(vectordb, N):

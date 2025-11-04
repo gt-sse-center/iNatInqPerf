@@ -59,6 +59,7 @@ class Milvus(VectorDatabase):
         except Exception:
             logger.exception("Milvus server is not running or connection failed")
 
+        # NOTE: pymilvus is very slow to connect, takes ~8 seconds as per profiling.
         self.client = MilvusClient(uri=f"http://{url}:{port}")
 
         # Remove collection if it already exists
@@ -165,8 +166,9 @@ class Milvus(VectorDatabase):
         """Return index statistics."""
         return self.client.describe_index(collection_name=self.collection_name, index_name=self.index_name)
 
-    def teardown(self) -> None:
+    def close(self) -> None:
         """Teardown the Milvus vector database."""
-        self.client.drop_collection(self.collection_name)
-        self.client.close()
+        if hasattr(self, "client") and self.client:
+            self.client.drop_collection(self.collection_name)
+            self.client.close()
         connections.disconnect(alias="default")

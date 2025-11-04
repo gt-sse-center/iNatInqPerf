@@ -6,8 +6,8 @@ import time
 import docker
 import numpy as np
 import pytest
-from datasets import Dataset
 import weaviate
+from datasets import Dataset
 from weaviate.collections.classes import config
 
 from inatinqperf.adaptors.base import DataPoint, Query
@@ -48,9 +48,9 @@ def container_fixture():
     # This avoids connection timeout issues in tests.
     time.sleep(3)
 
-    yield container
-
-    if created:
+    try:
+        yield container
+    finally:
         container.stop()
 
 

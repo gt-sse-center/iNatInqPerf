@@ -69,11 +69,14 @@ def running_containers_fixture(docker_client):
     finally:
         for container in containers:
             try:
-                container.kill()
+                container.stop(timeout=5)
             except docker_mod.errors.NotFound:
-                pass
+                continue
             except docker_mod.errors.APIError:
-                pass
+                try:
+                    container.kill()
+                except docker_mod.errors.APIError:
+                    pass
         for image in tagged_images:
             try:
                 docker_client.images.remove(image, force=True)

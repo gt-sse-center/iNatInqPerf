@@ -18,6 +18,7 @@ vectordb:
     m: 64
     nbits: 8
     nprobe: 32
+    port: "0"  # Required for config validation; not used
 
 search:
   topk: 10

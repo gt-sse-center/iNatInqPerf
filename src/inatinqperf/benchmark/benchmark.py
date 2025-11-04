@@ -10,10 +10,8 @@ from datasets import Dataset
 from loguru import logger
 from tqdm import tqdm
 
-from inatinqperf.adaptors import VECTORDBS
-from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors import VECTORDBS, DataPoint, Faiss, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
-from inatinqperf.adaptors.faiss_adaptor import Faiss
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.benchmark.container import container_context
 from inatinqperf.utils import (
@@ -295,6 +293,8 @@ class Benchmarker:
         # Compute embeddings
         dataset = self.embed()
 
+        vectordb: VectorDatabase | None = None
+
         with container_context(self.cfg):
             # Build baseline vector database
             baseline_vectordb = self.build_baseline(dataset)
@@ -308,18 +308,18 @@ class Benchmarker:
             # Update operations
             self.update(dataset, vectordb)
 
-            # Clean up the vectordb
-            del vectordb
-
         # Gracefully release vector database resources.
         # We are using faiss as baseline so no need to close it
         # in future, if any database (like weaviate) is used as baseline
         # then close it here as well
 
-        try:
-            vectordb.close()
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.warning(f"Failed to close vectordb '{self.cfg.vectordb.type}': {exc!s}")
+        if vectordb is not None:
+            try:
+                vectordb.close()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(f"Failed to close vectordb '{self.cfg.vectordb.type}': {exc!s}")
+            finally:
+                vectordb = None
 
 
 def ensure_dir(p: Path) -> Path:

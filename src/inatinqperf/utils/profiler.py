@@ -8,13 +8,13 @@ import tracemalloc
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import psutil
 from loguru import logger
+from pydantic import ValidationError
 
-if TYPE_CHECKING:
-    from inatinqperf.benchmark.configuration import ContainerConfig
+from inatinqperf.benchmark.configuration import ContainerConfig
 
 try:  # pragma: no cover - import guard only
     import docker
@@ -30,14 +30,28 @@ _MB = 1024 * 1024
 class ContainerStatsCollector:
     """Collect metrics for one or more Docker containers."""
 
-    def __init__(self, containers: Sequence["ContainerConfig"] | None) -> None:
+    def __init__(self, containers: Sequence[ContainerConfig | Mapping[str, Any]] | None) -> None:
         """Set up the collector with optional container descriptions."""
         # We accept zero or more container configs; absence disables container profiling.
         if not containers:
             logger.info("Container profiling not enabled (no container provided)")
             self.configs: list[ContainerConfig] = []
         else:
-            self.configs = list(containers)
+            parsed: list[ContainerConfig] = []
+            for config in containers:
+                if isinstance(config, ContainerConfig):
+                    parsed.append(config)
+                else:
+                    try:
+                        data = dict(config)
+                        healthcheck = data.get("healthcheck")
+                        if isinstance(healthcheck, str):
+                            data["healthcheck"] = {"test": healthcheck}
+                        parsed.append(ContainerConfig(**data))
+                    except (TypeError, ValidationError) as exc:
+                        msg = f"Invalid container configuration: {config!r}"
+                        raise ValueError(msg) from exc
+            self.configs = parsed
 
         self.docker_client = None
         self._containers: dict[str, Any] = {}
@@ -264,7 +278,7 @@ class Profiler:
         self,
         step: str,
         results_dir: Path = Path(".results"),
-        containers: Sequence["ContainerConfig"] | None = None,
+        containers: Sequence[ContainerConfig | Mapping[str, Any]] | None = None,
     ) -> None:
         """Initialize profiler."""
         # TODO: change to Sequence[ContainerConfig]

@@ -53,12 +53,7 @@ def test_container_config_list(benchmark_yaml):
     assert len(containers) == 1
     assert containers[0].image == "qdrant/qdrant"
     assert len(containers[0].ports) == 1
-<<<<<<< HEAD
     assert containers[0].healthcheck["test"] == "healthcheck test"
-=======
-    assert containers[0].healthcheck == "healthcheck test"
-    assert containers[0].name is None
->>>>>>> bbc74a1 (container profiling)
 
 
 def test_config(benchmark_yaml):

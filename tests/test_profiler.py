@@ -60,7 +60,7 @@ def running_containers_fixture(docker_client):
                 name=config_name,
                 image=image_ref,
                 ports={},
-                healthcheck="echo ok",
+                healthcheck={"test": "echo ok"},
             )
         )
 
@@ -220,6 +220,18 @@ def test_extract_metrics_returns_expected_values():
 
     assert metrics_c["net_rx_bytes"] > metrics_b["net_rx_bytes"]
     assert metrics_c["net_tx_bytes"] > metrics_a["net_tx_bytes"]
+
+
+def test_container_collector_accepts_mapping():
+    cfg = {
+        "image": "busybox:latest",
+        "name": "sample",
+        "ports": {},
+        "healthcheck": {"test": "echo ok"},
+    }
+
+    collector = profiler.ContainerStatsCollector([cfg])
+    assert isinstance(collector.configs[0], ContainerConfig)
 
 
 def test_container_collector_profiles_running_containers(running_test_containers):

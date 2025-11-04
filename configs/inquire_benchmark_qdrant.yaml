@@ -11,9 +11,16 @@ embedding:
 
 containers:
   - image: "qdrant/qdrant:latest"
+    name: "qdrant"
+    hostname: "localhost"
     ports:
-      "6333": "6333"
-    healthcheck: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
+      6333: 6333
+    healthcheck:
+      test: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
+      retries: 3
+
 
 vectordb:
   type: qdrant.hnsw

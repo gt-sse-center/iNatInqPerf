@@ -34,7 +34,7 @@ vectordb:
   params:
     index_type: hnsw
     metric: cosine
-    url: http://localhost
+    url: http://localhost # needs the http[s]
     port: "8080"
     collection_name: Benchmark
     timeout: 10.0

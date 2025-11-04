@@ -19,44 +19,30 @@ from inatinqperf.adaptors.weaviate_adaptor import Weaviate
 def container_fixture():
     """Ensure a Weaviate container is available for the duration of the tests."""
     client = docker.from_env()
-    container_name = "inatinqperf-test-weaviate"
-    created = False
-
-    try:
-        container = client.containers.get(container_name)
-        container.reload()
-        if container.status != "running":
-            container.start()
-    except docker.errors.NotFound:
-        try:
-            container = client.containers.run(
-                "cr.weaviate.io/semitechnologies/weaviate:1.33.2",
-                name=container_name,
-                ports={"8080": "8080", "50051": "50051"},
-                # Minimal command to expose the HTTP interface on localhost:8080
-                command=["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"],
-                # Environment mirrors the configuration used during benchmark runs.
-                environment={
-                    "QUERY_DEFAULTS_LIMIT": "25",
-                    "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true",
-                    "PERSISTENCE_DATA_PATH": "/var/lib/weaviate",
-                    "AUTOSCHEMA_ENABLED": "false",
-                },
-                remove=True,
-                detach=True,
-                healthcheck={
-                    "test": ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"],
-                    "interval": 30 * 10**9,
-                    "timeout": 10 * 10**9,
-                    "retries": 3,
-                },
-            )
-            created = True
-        except docker.errors.APIError as exc:
-            message = str(exc).lower()
-            if "port is already allocated" in message:
-                pytest.skip("Skipping Weaviate adaptor tests: required ports are already in use")
-            raise
+    container = client.containers.run(
+        "cr.weaviate.io/semitechnologies/weaviate:1.33.2",
+        ports={
+            "8080": "8080",
+            "50051": "50051",
+        },
+        # Minimal command to expose the HTTP interface on localhost:8080
+        command=["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"],
+        # Environment mirrors the configuration used during benchmark runs.
+        environment={
+            "QUERY_DEFAULTS_LIMIT": "25",
+            "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true",
+            "PERSISTENCE_DATA_PATH": "/var/lib/weaviate",
+            "AUTOSCHEMA_ENABLED": "false",  # Disable auto-schema,
+        },
+        remove=True,
+        detach=True,
+        healthcheck={
+            "test": ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"],
+            "interval": 30 * 10**9,
+            "timeout": 10 * 10**9,
+            "retries": 3,
+        },
+    )
 
     # Wait for 3 seconds since the Weaviate container is slow to load.
     # This avoids connection timeout issues in tests.

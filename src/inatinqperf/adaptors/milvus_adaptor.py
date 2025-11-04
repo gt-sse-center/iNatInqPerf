@@ -168,6 +168,7 @@ class Milvus(VectorDatabase):
 
     def close(self) -> None:
         """Teardown the Milvus vector database."""
-        self.client.drop_collection(self.collection_name)
-        self.client.close()
+        if hasattr(self, "client") and self.client:
+            self.client.drop_collection(self.collection_name)
+            self.client.close()
         connections.disconnect(alias="default")

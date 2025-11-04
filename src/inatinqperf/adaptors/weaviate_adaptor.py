@@ -191,4 +191,5 @@ class Weaviate(VectorDatabase):
 
     def close(self) -> None:
         """Close database connection."""
-        self.client.close()
+        if hasattr(self, "client") and self.client:
+            self.client.close()

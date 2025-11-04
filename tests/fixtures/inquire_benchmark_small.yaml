@@ -11,7 +11,7 @@ embedding:
 
 containers:
   - image: "qdrant/qdrant"
-    name: "qdrant"
+    name: "test_qdrant"
     hostname: "localhost"
     ports:
       4000: 4000

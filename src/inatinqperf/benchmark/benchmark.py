@@ -247,6 +247,9 @@ class Benchmarker:
             # Update operations
             self.update(dataset, vectordb)
 
+            # Clean up the vectordb
+            del vectordb
+
 
 def ensure_dir(p: Path) -> Path:
     """Ensure directory exists."""

@@ -188,3 +188,7 @@ class Weaviate(VectorDatabase):
             "collection_name": self.collection_name,
             "dim": self.dim,
         }
+
+    def close(self) -> None:
+        """Close database connection."""
+        self.client.close()

@@ -102,3 +102,11 @@ class VectorDatabase(ABC):
     @abstractmethod
     def stats(self) -> dict[str, object]:
         """Return database statistics."""
+
+    def close(self) -> None:
+        """Method to perform cleanup when the adaptor is about to be deleted."""
+        return
+
+    def __del__(self) -> None:
+        """Destructor method, which automatically closes any open connections."""
+        self.close()

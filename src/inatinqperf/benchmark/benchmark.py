@@ -171,14 +171,16 @@ class Benchmarker:
             raise ValueError(msg)
 
         metadata_keys = [key for key in dataset.column_names if key not in {"embedding", "id"}]
-        datapoints: list[DataPoint] = []
+        metadata_columns = {key: dataset[key] for key in metadata_keys}
 
-        for idx, row in enumerate(dataset):
-            row_id = row["id"] if "id" in row and row["id"] is not None else idx
-            metadata = {key: row[key] for key in metadata_keys}
-            datapoints.append(DataPoint(id=int(row_id), vector=row["embedding"], metadata=metadata))
-
-        return datapoints
+        return [
+            DataPoint(
+                id=int(row_id),
+                vector=vector,
+                metadata={key: metadata_columns[key][idx] for key in metadata_keys},
+            )
+            for idx, (row_id, vector) in enumerate(zip(dataset["id"], dataset["embedding"], strict=True))
+        ]
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""

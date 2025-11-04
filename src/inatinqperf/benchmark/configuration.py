@@ -97,7 +97,7 @@ class ContainerConfig(BaseModel):
     name: NonEmptyStr | None = None
     image: NonEmptyStr
     name: NonEmptyStr
-    hostname: str = ""
+    hostname: str | None = None
     ports: dict[str | PositiveInt, PositiveInt]
     environment: dict[str, str] = {}
     volumes: list[str] = []

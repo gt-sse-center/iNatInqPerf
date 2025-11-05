@@ -14,7 +14,7 @@ from typing import Annotated
 import numpy as np
 import typer
 from datasets import Dataset, Features, Split, Value
-from datasets import LargeList as HFList
+from datasets import List as HFList
 from dotenv import load_dotenv
 from huggingface_hub import login as hf_login
 from loguru import logger
@@ -58,7 +58,7 @@ def create_dataset(
             # `id` column to be of type int64
             "id": Value("int64"),
             # `embedding` column is of type datasets.List[float32]
-            "embedding": HFList(dtype=Value("float32")),
+            "embedding": HFList(feature=Value("float32"), length=dim),
         },
     )
     if test_version:

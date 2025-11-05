@@ -128,7 +128,7 @@ class Faiss(VectorDatabase):
         nbits: int,
         nprobe: int,
     ) -> faiss.Index:
-        embeddings = np.asarray(dataset["embedding"])
+        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
         n = embeddings.shape[0]
 
         # Since FAISS hardcodes the minimum number
@@ -152,10 +152,8 @@ class Faiss(VectorDatabase):
         base = faiss.index_factory(dim, desc, metric_type)
         index = faiss.IndexIDMap2(base)
 
-        ivf = _unwrap_to_ivf(index.index)
-
         # Train the index
-        logger.info(f"Training with embeddings of shape {embeddings.shape}")
+        logger.info(f"Training IVFPQ with embeddings of shape {embeddings.shape} {embeddings.dtype}")
         index.train(embeddings)
 
         # Set nprobe (if we have IVF)

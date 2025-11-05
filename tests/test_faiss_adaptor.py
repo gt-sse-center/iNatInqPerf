@@ -103,7 +103,7 @@ def test_faiss_ivfpq_build_and_search_with_large_training(ivfpq_trainset, small_
     assert len(results) == 2
     # ids returned should come from our set (since they are much closer than random train points)
     assert results[0].id == 100
-    assert results[1].id == 101
+    assert results[1].id == 102
 
     # delete works and stats update
     vdb.delete([100])

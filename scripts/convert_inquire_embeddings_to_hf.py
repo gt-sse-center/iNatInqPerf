@@ -39,7 +39,14 @@ def data_generator(file_paths: list[str]) -> Generator:
             idx += 1
 
 
-def create_dataset(num_files: int, dim: int, embeddings_dir: Path, dataset_dir: Path) -> Dataset:
+def create_dataset(
+    num_files: int,
+    dim: int,
+    embeddings_dir: Path,
+    dataset_dir: Path,
+    *,
+    test_version: bool,
+) -> Dataset:
     """Create the dataset from the npy files in `file_paths`."""
     file_paths = [embeddings_dir / f"img_emb_{i}.npy" for i in tqdm(range(num_files))]
 
@@ -50,11 +57,18 @@ def create_dataset(num_files: int, dim: int, embeddings_dir: Path, dataset_dir: 
             "embedding": HFList(dtype=Value("float32")),
         },
     )
-    dataset = Dataset.from_generator(
-        lambda: data_generator(file_paths),
-        features=features,
-        split=Split.TRAIN,
-    )
+    if test_version:
+        embeddings = np.load(file_paths[0])[:1000]
+        dataset = Dataset.from_dict(
+            {"id": np.arange(1000).tolist(), "embedding": embeddings}, features=features, split=Split.TRAIN
+        )
+
+    else:
+        dataset = Dataset.from_generator(
+            lambda: data_generator(file_paths),
+            features=features,
+            split=Split.TRAIN,
+        )
     logger.info(f"Full dataset size: {dataset.num_rows}")
 
     logger.info(f"Saving to: {dataset_dir}")
@@ -84,23 +98,31 @@ def main(
     force: Annotated[  # noqa: FBT002
         bool, typer.Option("-f", help="Force dataset creation even if the dataset directory already exists.")
     ] = False,
+    test_version: Annotated[  # noqa: FBT002
+        bool, typer.Option("-t", help="Generate test version of the dataset with 1000 data points.")
+    ] = False,
 ) -> None:
     """Main runner."""
-    if access_token := os.getenv("HUGGINGFACE_ACCESS_TOKEN") is None:
+    if (access_token := os.getenv("HUGGINGFACE_ACCESS_TOKEN")) is None:
         raise RuntimeError("Please add HUGGINGFACE_ACCESS_TOKEN=<TOKEN> in .env file")
 
     if dataset_dir.exists() and not force:
         logger.info("Dataset already exists. Loading...")
         dataset = Dataset.load_from_disk(dataset_path=dataset_dir)
     else:
-        dataset = create_dataset(num_files, dim, embeddings_dir=embeddings_dir, dataset_dir=dataset_dir)
+        dataset = create_dataset(
+            num_files, dim, embeddings_dir=embeddings_dir, dataset_dir=dataset_dir, test_version=test_version
+        )
 
     logger.info("Logging into 🤗")
-
     hf_login(token=access_token)
 
-    logger.info("Pushing to 🤗 dataset")
-    dataset.push_to_hub("gt-csse/iNat24-vit-b-16")
+    hub = "gt-csse/iNat24-vit-b-16"
+    if test_version:
+        hub = f"{hub}-test"
+
+    logger.info(f"Pushing to 🤗 dataset {hub}")
+    dataset.push_to_hub(hub)
 
 
 if __name__ == "__main__":

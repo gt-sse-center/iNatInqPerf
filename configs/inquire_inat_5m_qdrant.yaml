@@ -1,13 +1,13 @@
 dataset:
-  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
-  splits: "validation+test"
-  directory: data/inquire_benchmark/raw
-  export_images: true
+  dataset_id: gt-csse/iNat24-vit-b-16
+  splits: "train"
+  directory: data/inquire_inat/emb
+  export_images: false
 
 embedding:
-  model_id: openai/clip-vit-base-patch32
+  model_id: openai/clip-vit-base-patch16
   batch_size: 64
-  directory: data/inquire_benchmark/emb
+  directory: data/inquire_inat/emb
 
 containers:
   - image: "qdrant/qdrant:latest"

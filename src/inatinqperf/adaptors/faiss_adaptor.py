@@ -1,10 +1,12 @@
 """FAISS vector database adaptor."""
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 
 import faiss
 import numpy as np
+import pyarrow as pa
 from loguru import logger
+from tqdm import tqdm
 
 from inatinqperf.adaptors.base import (
     DataPoint,
@@ -14,6 +16,10 @@ from inatinqperf.adaptors.base import (
     VectorDatabase,
 )
 from inatinqperf.adaptors.enums import IndexTypeBase, Metric
+
+# Process large datasets in chunks to keep peak FAISS ingest memory bounded.
+_DEFAULT_BATCH_SIZE = 8192
+Batch = tuple[np.ndarray, np.ndarray]
 
 
 class FaissIndexType(IndexTypeBase):
@@ -57,7 +63,6 @@ class Faiss(VectorDatabase):
             **kwargs: All the extra keyword arguments. This is not used.
         """
         super().__init__(dataset, metric)
-
         self.index_type: FaissIndexType = self._translate_index_type(index_type)
         self.nlist = nlist
         self.m = m
@@ -66,7 +71,6 @@ class Faiss(VectorDatabase):
 
         if self.index_type == FaissIndexType.FLAT:
             self.index = self._build_flat_index(metric=self.metric, dim=self.dim, dataset=dataset)
-
         elif self.index_type == FaissIndexType.IVFPQ:
             self.index = self._build_ivfpq_index(
                 metric=self.metric,
@@ -108,13 +112,25 @@ class Faiss(VectorDatabase):
 
         index = faiss.IndexIDMap2(base)
 
-        # Add dataset after building the index.
-        ids = np.asarray(dataset["id"], dtype=np.int64)
-        index.remove_ids(faiss.IDSelectorArray(ids))
+        logger.info(
+            f"Ingesting {len(dataset)} vectors into Faiss FLAT index (batch_size={_DEFAULT_BATCH_SIZE})"
+        )
+        # Iterate over zero-copy Arrow batches when available to minimise conversion overhead.
+        batch_iter = _iter_dataset_batches(
+            dataset,
+            _DEFAULT_BATCH_SIZE,
+            show_progress=True,
+            desc="FAISS FLAT ingest",
+        )
+        total_added = 0
+        for ids_batch, embeddings_batch in batch_iter:
+            if not len(ids_batch):
+                continue
+            # Stream batches straight into the index to avoid a monolithic array.
+            index.add_with_ids(embeddings_batch, ids_batch)
+            total_added += len(ids_batch)
 
-        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
-        logger.info(f"Building Faiss FLAT index with embeddings of shape {embeddings.shape}")
-        index.add_with_ids(embeddings, ids)
+        logger.info(f"Building Faiss FLAT index with {total_added} vectors")
 
         return index
 
@@ -128,8 +144,7 @@ class Faiss(VectorDatabase):
         nbits: int,
         nprobe: int,
     ) -> faiss.Index:
-        embeddings = np.asarray(dataset["embedding"])
-        n = embeddings.shape[0]
+        n = len(dataset)
 
         # Since FAISS hardcodes the minimum number
         # of clustering points to 39, we make sure
@@ -150,13 +165,41 @@ class Faiss(VectorDatabase):
             metric_type = faiss.METRIC_L2
 
         base = faiss.index_factory(dim, desc, metric_type)
+
         index = faiss.IndexIDMap2(base)
 
         ivf = _unwrap_to_ivf(index.index)
 
-        # Train the index
-        logger.info(f"Training with embeddings of shape {embeddings.shape}")
-        index.train(embeddings)
+        # Extract the entire embedding matrix once for training; this prefers zero-copy Arrow buffers.
+        full_embeddings = _extract_embeddings(dataset)
+        if full_embeddings.size == 0:
+            msg = "No embeddings available to train the FAISS index."
+            raise ValueError(msg)
+
+        logger.info(
+            f"Training Faiss IVFPQ index with embeddings of shape {full_embeddings.shape} "
+            f"(using all vectors, effective_nlist={effective_nlist})"
+        )
+        # FAISS training expects a contiguous block; we now feed every vector.
+        index.train(full_embeddings)
+        # Release the training matrix before streaming ingestion to reduce peak memory.
+        del full_embeddings
+
+        logger.info(f"Adding {len(dataset)} vectors to Faiss IVFPQ index (batch_size={_DEFAULT_BATCH_SIZE})")
+        batch_iter = _iter_dataset_batches(
+            dataset,
+            _DEFAULT_BATCH_SIZE,
+            show_progress=True,
+            desc="FAISS IVFPQ ingest",
+        )
+        total_added = 0
+        for ids_batch, embeddings_batch in batch_iter:
+            if not len(ids_batch):
+                continue
+            index.add_with_ids(embeddings_batch, ids_batch)
+            total_added += len(ids_batch)
+
+        logger.info(f"_build_ivfpq_index : added {total_added} vectors to index")
 
         # Set nprobe (if we have IVF)
         ivf = _unwrap_to_ivf(index.index)
@@ -208,12 +251,14 @@ class Faiss(VectorDatabase):
 
         distances, labels = self.index.search(query_vector, topk)
 
-        return [
-            SearchResult(id=label, score=distance)
-            for distance, label in zip(
-                distances.squeeze().astype(np.float32), labels.squeeze().astype(np.float32)
-            )
-        ]
+        distances = np.array(distances).reshape(-1).astype(np.float32, copy=False)
+        labels = np.array(labels).reshape(-1).astype(np.int64, copy=False)
+
+        results: list[SearchResult] = []
+        for score, label in zip(distances, labels):
+            results.append(SearchResult(id=int(label), score=float(score)))
+
+        return results
 
     def delete(self, ids: Sequence[int]) -> None:
         """Delete vectors with given IDs."""
@@ -255,3 +300,149 @@ def _unwrap_to_ivf(base: faiss.Index) -> faiss.Index | None:
         node = getattr(node, "index", None)
         visited += 1
     return None
+
+
+def _arrow_array_to_numpy(
+    obj: pa.Array | pa.ChunkedArray | pa.Buffer,
+    dtype: np.dtype | None = None,
+) -> np.ndarray:
+    """Return a NumPy view of an Arrow array or buffer, copying only if unavoidable."""
+    if isinstance(obj, pa.ChunkedArray):
+        obj = obj.combine_chunks()
+
+    if isinstance(obj, pa.Buffer):
+        np_array = np.frombuffer(obj, dtype=dtype or np.int32)
+    elif isinstance(obj, pa.Array):
+        try:
+            np_array = obj.to_numpy(zero_copy_only=True)
+        except (pa.ArrowInvalid, ValueError):
+            np_array = obj.to_numpy(zero_copy_only=False)
+    else:
+        msg = f"Unsupported Arrow object type: {type(obj)}"
+        raise TypeError(msg)
+
+    if dtype is not None and np_array.dtype != dtype:
+        np_array = np_array.astype(dtype, copy=False)
+
+    return np_array
+
+
+def _embedding_feature_length(dataset: HuggingFaceDataset) -> int:
+    """Return embedding dimensionality hint from dataset features."""
+    feature = dataset.features.get("embedding") if hasattr(dataset, "features") else None
+    length = getattr(getattr(feature, "feature", None), "length", -1)
+    return int(length) if isinstance(length, int) and length > 0 else -1
+
+
+def _arrow_list_to_matrix(array: pa.Array | pa.ChunkedArray, feature_length: int) -> np.ndarray:
+    """Convert an Arrow list-based array into a 2D C-contiguous float32 matrix."""
+    if isinstance(array, pa.ChunkedArray):
+        if array.num_chunks == 1:
+            return _arrow_list_to_matrix(array.chunk(0), feature_length)
+
+        chunks = [_arrow_list_to_matrix(array.chunk(i), feature_length) for i in range(array.num_chunks)]
+        if not chunks:
+            dim = max(0, feature_length)
+            return np.empty((0, dim), dtype=np.float32)
+        return np.concatenate(chunks, axis=0)
+
+    if isinstance(array, pa.FixedSizeListArray):
+        values = _arrow_array_to_numpy(array.values, dtype=np.float32)
+        dim = int(array.type.list_size)
+        vectors = values.reshape(len(array), dim)
+        return np.require(vectors, requirements=["C"])
+
+    if isinstance(array, (pa.ListArray, pa.LargeListArray)):
+        offsets = _arrow_array_to_numpy(array.offsets, dtype=np.int64)
+        num_rows = len(offsets) - 1
+        if num_rows == 0:
+            dim = max(0, feature_length)
+            return np.empty((0, dim), dtype=np.float32)
+
+        inferred_dim = int(offsets[1] - offsets[0]) if len(offsets) > 1 else feature_length
+        if inferred_dim <= 0 and feature_length > 0:
+            inferred_dim = feature_length
+        if inferred_dim <= 0:
+            msg = "Unable to infer embedding dimension from Arrow offsets."
+            raise ValueError(msg)
+
+        values = _arrow_array_to_numpy(array.values, dtype=np.float32)
+        vectors = values.reshape(num_rows, inferred_dim)
+        return np.require(vectors, requirements=["C"])
+
+    # Fallback: materialise to NumPy for unexpected layouts.
+    numpy_values = np.asarray(array.to_numpy(zero_copy_only=False), dtype=np.float32)
+    if numpy_values.ndim == 1:
+        dim = feature_length if feature_length > 0 else numpy_values.shape[0]
+        numpy_values = numpy_values.reshape(1, dim)
+    return np.require(numpy_values, requirements=["C"])
+
+
+def _iter_dataset_batches(
+    dataset: HuggingFaceDataset,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    *,
+    show_progress: bool = False,
+    desc: str | None = None,
+) -> Generator[Batch, None, None]:
+    """Yield `(ids, vectors)` batches, favouring zero-copy Arrow views where possible."""
+    total = len(dataset)
+    progress = tqdm(total=total, desc=desc, unit="vec") if show_progress else None
+
+    try:
+        arrow_data = getattr(dataset, "data", None)
+        if arrow_data is not None and hasattr(arrow_data, "to_batches"):
+            # Hugging Face datasets expose their Arrow table via .data; iterate batches directly.
+            table = arrow_data
+            feature_length = _embedding_feature_length(dataset)
+            for batch in table.to_batches(max_chunksize=batch_size):
+                try:
+                    ids_arr = _arrow_array_to_numpy(batch.column("id"), dtype=np.int64)
+                    emb_arr = _arrow_list_to_matrix(batch.column("embedding"), feature_length)
+                except Exception:
+                    ids_arr = np.asarray(batch.column("id").to_numpy(zero_copy_only=False), dtype=np.int64)
+                    emb_arr = np.asarray(batch.column("embedding").to_pylist(), dtype=np.float32)
+                ids_arr = np.require(ids_arr, requirements=["C"])
+                emb_arr = np.require(emb_arr, requirements=["C"])
+                if progress is not None:
+                    progress.update(len(ids_arr))
+                yield ids_arr, emb_arr
+            return
+
+        # Fall back to numpy conversions when Arrow metadata is not available (e.g. in tests).
+        ids = dataset["id"]
+        embeddings = dataset["embedding"]
+        if not isinstance(ids, np.ndarray):
+            ids = np.asarray(ids, dtype=np.int64)
+        if not isinstance(embeddings, np.ndarray):
+            embeddings = np.asarray(embeddings, dtype=np.float32)
+        # Slice numpy views per batch when only list-backed columns are available.
+        for start in range(0, total, batch_size):
+            end = min(start + batch_size, total)
+            ids_batch = np.require(ids[start:end].astype(np.int64, copy=False), requirements=["C"])
+            emb_batch = np.require(embeddings[start:end].astype(np.float32, copy=False), requirements=["C"])
+            if progress is not None:
+                progress.update(len(ids_batch))
+            yield ids_batch, emb_batch
+    finally:
+        if progress is not None:
+            progress.close()
+
+
+def _extract_embeddings(dataset: HuggingFaceDataset) -> np.ndarray:
+    """Extract embeddings as a 2D float32 NumPy array without materialising Python lists."""
+    arrow_data = getattr(dataset, "data", None)
+    if arrow_data is not None and hasattr(arrow_data, "column"):
+        try:
+            # Prefer Arrow-backed buffers so training can proceed without extra copies.
+            column = arrow_data.column("embedding")
+            return _arrow_list_to_matrix(column, _embedding_feature_length(dataset))
+        except (KeyError, pa.ArrowInvalid, ValueError):
+            pass
+
+    embeddings = dataset["embedding"]
+    if not isinstance(embeddings, np.ndarray):
+        embeddings = np.asarray(embeddings)
+    if embeddings.dtype != np.float32:
+        embeddings = embeddings.astype(np.float32, copy=False)
+    return np.require(embeddings, requirements=["C"])

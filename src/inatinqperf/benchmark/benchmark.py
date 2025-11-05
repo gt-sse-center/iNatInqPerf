@@ -125,6 +125,8 @@ class Benchmarker:
 
         logger.info(f"Stats: {vdb.stats()}")
 
+        # Emit a closing marker so benchmark logs clearly delimit setup time.
+        logger.info(f"Exiting building {vdb_type} vector database")
         return vdb
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
@@ -214,7 +216,10 @@ class Benchmarker:
         rng = np.random.default_rng(42)
         add_vecs = x[:add_n].copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
-        add_ids = list(range(add_n))
+        # Pick new ids beyond the current dataset to avoid collisions during updates.
+        existing_ids = np.asarray(dataset["id"]) if len(dataset) else np.array([], dtype=int)
+        start_id = int(np.max(existing_ids)) + 1 if existing_ids.size else 0
+        add_ids = list(range(start_id, start_id + add_n))
 
         with Profiler(f"update-add-{vdb_type}"):
             data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]

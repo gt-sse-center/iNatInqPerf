@@ -63,7 +63,7 @@ class VectorDatabase(ABC):
         """
         # Will raise exception if `metric` is not valid.
         self.metric = Metric(metric)
-        self.dim = np.asarray(dataset["embedding"]).shape[1]
+        self.dim = self._infer_dim(dataset)
 
     @staticmethod
     @abstractmethod
@@ -110,3 +110,23 @@ class VectorDatabase(ABC):
     def __del__(self) -> None:
         """Destructor method, which automatically closes any open connections."""
         self.close()
+
+    @staticmethod
+    def _infer_dim(dataset: HuggingFaceDataset) -> int:
+        """Infer embedding dimensionality without materialising the full dataset."""
+
+        # Prefer schema metadata from Hugging Face datasets to avoid materialising any rows.
+        embedding_feature = dataset.features.get("embedding") if hasattr(dataset, "features") else None
+        inner_feature = getattr(embedding_feature, "feature", None)
+        length = getattr(inner_feature, "length", None)
+        if isinstance(length, int) and length > 0:
+            return length
+
+        if len(dataset) == 0:
+            return 0
+
+        first_embedding = dataset[0]["embedding"]
+        if isinstance(first_embedding, np.ndarray):
+            return int(first_embedding.shape[-1])
+        # Some datasets expose embeddings as lists; use the list length as a last resort.
+        return len(first_embedding)

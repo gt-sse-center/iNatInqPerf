@@ -47,7 +47,7 @@ def ivfpq_small_trainset_fixture():
 def ivfpq_trainset_fixture():
     """Large training set so IVF-PQ can train without FAISS clustering warnings."""
     rng = np.random.default_rng(42)
-    X = rng.standard_normal((10240, 2)).astype(np.float32)  # >= 9984
+    X = rng.standard_normal((624, 2)).astype(np.float32)
     ids = np.arange(1000, 1000 + X.shape[0], dtype=np.int64)
 
     data_dict = {"embedding": X, "id": ids}

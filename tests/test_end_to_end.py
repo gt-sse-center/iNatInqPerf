@@ -16,5 +16,5 @@ from inatinqperf.benchmark import Benchmarker
 def test_full_run(fixtures_dir, config_filename):
     config_file = fixtures_dir / config_filename
 
-    benchmarker = Benchmarker(config_file)
+    benchmarker = Benchmarker(config_file, base_path=fixtures_dir.parent.parent)
     benchmarker.run()

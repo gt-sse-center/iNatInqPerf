@@ -48,12 +48,16 @@ def create_dataset(
     test_version: bool,
 ) -> Dataset:
     """Create the dataset from the npy files in `file_paths`."""
+
+    # NOTE: This is very specific to the inquire-inat dataset and may fail if using another dataset.
     file_paths = [embeddings_dir / f"img_emb_{i}.npy" for i in tqdm(range(num_files))]
 
     logger.info(f"Generating 🤗 dataset with dim:{dim}")
     features = Features(
         {
+            # `id` column to be of type int64
             "id": Value("int64"),
+            # `embedding` column is of type datasets.List[float32]
             "embedding": HFList(dtype=Value("float32")),
         },
     )

@@ -40,11 +40,15 @@ class VectorDatabaseParams(BaseModel):
 
     metric: Metric
     index_type: NonEmptyStr
+
+    #### These are FAISS recommended default values for the IVFPQ index. ####
     nlist: int = 32768
     m: int = 64
     nbits: int = 8
     nprobe: int = 32
     ef: int = 32
+    ########
+
     batch_size: int = 1000
 
     def to_dict(self) -> dict[str, Any]:

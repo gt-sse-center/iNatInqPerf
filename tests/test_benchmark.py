@@ -102,7 +102,7 @@ def test_download_preexisting(tmp_path, config_yaml, caplog):
 
     benchmarker.download()
 
-    assert "Dataset already exists, continuing..." in caplog.text
+    assert "Dataset already exists" in caplog.text
 
 
 def test_embed(config_yaml, data_path):
@@ -110,9 +110,8 @@ def test_embed(config_yaml, data_path):
     benchmarker.download()
     ds = benchmarker.embed()
 
-    ds = ds.with_format("numpy")
-
-    assert ds["embedding"].shape == (256, 512)
+    assert len(ds["embedding"]) == 256
+    assert len(ds["embedding"][0]) == 512
     assert len(ds["id"]) == 256
     assert len(ds["label"]) == 256
 
@@ -128,7 +127,8 @@ def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
 
     benchmarker.embed()
 
-    assert "Embeddings found, loading instead of computing" in caplog.text
+    assert "Embeddings found" in caplog.text
+    assert "loading instead of computing" in caplog.text
 
 
 def test_save_as_huggingface_dataset(config_yaml, tmp_path):

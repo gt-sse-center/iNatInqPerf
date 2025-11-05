@@ -37,6 +37,25 @@ class Faiss(VectorDatabase):
         index_type: str = "flat",
         **kwargs,  # noqa: ARG002
     ) -> None:
+        """Constructor for the FAISS adaptor.
+
+        Args:
+            dataset (HuggingFaceDataset): The dataset to load into the vector database for indexing.
+            metric (Metric, optional): The metric to use for computing similarity during search.
+                Defaults to Metric.INNER_PRODUCT.
+            nlist (int, optional): The number of clusters to generate when creating
+                an inverted file (IVF) index. Defaults to 32768.
+            m (int, optional): The number of sub-vectors to split the vectors into
+                for multi-codebook quantization. Defaults to 64.
+            nbits (int, optional): The number of bits to use for each sub-vector quantizer.
+                This gives the number of clusters as 2^nbits.
+                Defaults to 8.
+            nprobe (int, optional): The number of clusters visited during search. Defaults to 32.
+            index_type (str, optional): The type of index to use. Defaults to "flat".
+
+        Keyword Args:
+            **kwargs: All the extra keyword arguments. This is not used.
+        """
         super().__init__(dataset, metric)
 
         self.index_type: FaissIndexType = self._translate_index_type(index_type)

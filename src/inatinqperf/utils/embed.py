@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from datasets import Dataset, Features, Value, load_from_disk
 from datasets import Sequence as HFSequence
+from loguru import logger
 from PIL import Image
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
@@ -39,6 +40,7 @@ class PretrainedCLIPModel:
 
     def __init__(self, model_id: str) -> None:
         self.device = self.get_device()
+        logger.info(f"Using device: {self.device}")
         self.proc = CLIPProcessor.from_pretrained(model_id, use_fast=False)
         self.model = CLIPModel.from_pretrained(model_id).to(self.device)
         # Get the embedding dimension from the model config

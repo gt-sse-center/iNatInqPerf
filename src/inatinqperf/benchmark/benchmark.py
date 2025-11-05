@@ -60,7 +60,7 @@ class Benchmarker:
         dataset_dir = self.base_path / self.cfg.dataset.directory
 
         if dataset_dir.exists():
-            logger.info("Dataset already exists, continuing...")
+            logger.info(f"Dataset already exists at {dataset_dir}, continuing...")
             return
 
         ensure_dir(dataset_dir)
@@ -87,7 +87,7 @@ class Benchmarker:
         embeddings_dir = self.base_path / self.cfg.embedding.directory
 
         if embeddings_dir.exists():
-            logger.info("Embeddings found, loading instead of computing")
+            logger.info(f"Embeddings found at {embeddings_dir}, loading instead of computing")
             return Dataset.load_from_disk(dataset_path=embeddings_dir)
 
         model_id = self.cfg.embedding.model_id

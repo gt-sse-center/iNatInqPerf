@@ -92,7 +92,10 @@ class Faiss(VectorDatabase):
         # Add dataset after building the index.
         ids = np.asarray(dataset["id"], dtype=np.int64)
         index.remove_ids(faiss.IDSelectorArray(ids))
-        index.add_with_ids(np.asarray(dataset["embedding"], dtype=np.float32), ids)
+
+        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
+        logger.info(f"Building Faiss FLAT index with embeddings of shape {embeddings.shape}")
+        index.add_with_ids(embeddings, ids)
 
         return index
 
@@ -133,6 +136,7 @@ class Faiss(VectorDatabase):
         ivf = _unwrap_to_ivf(index.index)
 
         # Train the index
+        logger.info(f"Training with embeddings of shape {embeddings.shape}")
         index.train(embeddings)
 
         # Set nprobe (if we have IVF)

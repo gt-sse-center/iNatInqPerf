@@ -37,23 +37,22 @@ class ConcreteVectorDatabase(VectorDatabase):
         super().__init__(dataset, metric)
 
         dataset = dataset.with_format("numpy")
-        dim = dataset["embedding"].shape[1]
+        # [:] is a trick to get the numpy array
+        embeddings = dataset["embedding"][:]
+
+        dim = embeddings.shape[1]
 
         assert isinstance(dim, int) and dim > 0
         self._dim = dim
         self._metric = self._translate_metric(metric)
 
         # "Upsert" dataset
-        self._X = dataset["embedding"]
+        self._X = embeddings
         self._ids = dataset["id"]
 
     @staticmethod
     def _translate_metric(metric: Metric) -> str:
         return metric.lower()
-
-    def train_index(self, x_train: np.ndarray):
-        # Should be a no-op for this dummy; just validate dims
-        assert self._dim == x_train.shape[1]
 
     def upsert(self, x: Sequence[DataPoint]):
         ids = np.asarray([d.id for d in x], dtype=np.int64)
@@ -172,9 +171,8 @@ def test_upsert_replaces_existing(tiny_dataset):
     db = ConcreteVectorDatabase(tiny_dataset, metric=Metric.INNER_PRODUCT)
 
     # Upsert same ids with shifted vectors
-    tiny_dataset = tiny_dataset.with_format("numpy")
-    ids = tiny_dataset["id"]
-    X = tiny_dataset["embedding"]
+    ids = np.asarray(tiny_dataset["id"], dtype=np.int64)
+    X = np.asarray(tiny_dataset["embedding"], dtype=np.float32)
     X2 = X + 1.0
     data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(ids, X2)]
     db.upsert(data_points)

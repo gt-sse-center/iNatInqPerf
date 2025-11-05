@@ -1,13 +1,13 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
   splits: "validation+test"
-  directory: data/inquire_benchmark/raw
-  export_images: true
+  directory: data/inquire_test/raw
+  export_images: false
 
 embedding:
   model_id: openai/clip-vit-base-patch32
   batch_size: 64
-  directory: data/inquire_benchmark/emb
+  directory: data/inquire_test/emb
 
 container_network: "milvus"
 containers:

@@ -68,7 +68,7 @@ class Qdrant(VectorDatabase):
         # Batch insert dataset
         for batch in self._batched(dataset, batch_size):
             ids = [int(point["id"]) for point in batch]
-            vectors = [point["embedding"].tolist() for point in batch]
+            vectors = [point["embedding"] for point in batch]
 
             self.client.upsert(
                 collection_name=collection_name,

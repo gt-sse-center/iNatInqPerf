@@ -186,8 +186,6 @@ class Benchmarker:
             i1[i] = padded
         rec = recall_at_k(i1, i0, topk)
 
-        x = np.asarray(dataset["embedding"], dtype=np.float32)
-
         stats = {
             "vectordb": self.cfg.vectordb.type,
             "index_type": self.cfg.vectordb.params.index_type,
@@ -196,7 +194,8 @@ class Benchmarker:
             "lat_ms_p50": float(np.percentile(latencies, 50)),
             "lat_ms_p95": float(np.percentile(latencies, 95)),
             "recall@k": rec,
-            "ntotal": int(x.shape[0]),
+            # Use dataset length directly to avoid materialising the embeddings again.
+            "ntotal": len(dataset),
         }
 
         # Make values as lists so `tabulate` can print properly.

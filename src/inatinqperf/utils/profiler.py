@@ -74,15 +74,15 @@ class ContainerStatsCollector:
             if container is None:
                 continue
 
+            # Skip duplicate references so we only poll each container once.
             key = container.id
+            label = container.name or container.id[:12]
             if key in self._containers:
-                duplicate = container.name or container.id[:12]
                 logger.info(
-                    f"Container {duplicate} already tracked; ignoring duplicate configuration",
+                    f"Container {label} already tracked; ignoring duplicate configuration",
                 )
                 continue
 
-            label = container.name or container.id[:12]
             self._containers[key] = container
             self._container_labels[key] = label
             self._samples[key] = []
@@ -125,7 +125,13 @@ class ContainerStatsCollector:
         return result
 
     def _resolve_container(self, config: "ContainerConfig") -> object | None:
-        """Resolve a container for the given config; log on failure."""
+        """Return the running Docker container described by ``config``.
+
+        We look up by explicit name when provided, otherwise fall back to
+        the container image. On lookup failure or client errors we emit a
+        warning and return ``None`` so profiling can continue without that
+        container.
+        """
         if self.docker_client is None:
             return None
 
@@ -221,7 +227,12 @@ class ContainerStatsCollector:
 
     @staticmethod
     def _aggregate_samples(samples: Sequence[dict[str, float]]) -> dict[str, float]:
-        """Compute averages, maxima, and deltas from collected samples."""
+        """Summarise collected container metrics.
+
+        Each sample is a flat mapping produced by ``_extract_metrics`` for a single poll.
+        The return payload exposes counts, averages, maxima, and start/end deltas that
+        feed directly into the JSON profiler report.
+        """
         count = len(samples)
         if count == 0:
             return {}
@@ -281,8 +292,6 @@ class Profiler:
         containers: Sequence[ContainerConfig | Mapping[str, Any]] | None = None,
     ) -> None:
         """Initialize profiler."""
-        # TODO: change to Sequence[ContainerConfig]
-        # TODO: do we want to support containers as None or empty list?
         # Stash core execution context and ensure the results directory exists for JSON dumps.
         self.step = step
         self.results_dir = results_dir

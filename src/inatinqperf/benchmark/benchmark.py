@@ -297,19 +297,6 @@ class Benchmarker:
             # Update operations
             self.update(dataset, vectordb)
 
-        # Gracefully release vector database resources.
-        # We are using faiss as baseline so no need to close it
-        # in future, if any database (like weaviate) is used as baseline
-        # then close it here as well
-
-        if vectordb is not None:
-            try:
-                vectordb.close()
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning(f"Failed to close vectordb '{self.cfg.vectordb.type}': {exc!s}")
-            finally:
-                vectordb = None
-
 
 def ensure_dir(p: Path) -> Path:
     """Ensure directory exists."""

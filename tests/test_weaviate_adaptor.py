@@ -88,13 +88,10 @@ def dataset_fixture(N, dim) -> Dataset:
 def test_constructor(dataset, N):
     """Test the constructor of the Weaviate vector database."""
     adaptor = Weaviate(dataset, Metric.COSINE, "flat")
-    try:
-        collection = adaptor.client.collections.use(adaptor.collection_name)
+    collection = adaptor.client.collections.use(adaptor.collection_name)
 
-        response = collection.aggregate.over_all(total_count=True)
-        assert response.total_count == N
-    finally:
-        adaptor.close()
+    response = collection.aggregate.over_all(total_count=True)
+    assert response.total_count == N
 
 
 def test_invalid_constructor(dataset, caplog):
@@ -110,87 +107,73 @@ def test_invalid_constructor(dataset, caplog):
 
 def test_upsert(dataset, N, dim):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw")
-    try:
-        adaptor.upsert([DataPoint(N, np.ones(dim), metadata={})])
 
-        collection = adaptor.client.collections.use(adaptor.collection_name)
-        response = collection.aggregate.over_all(total_count=True)
-        assert response.total_count == N + 1
+    adaptor.upsert([DataPoint(N, np.ones(dim), metadata={})])
 
-        id_to_replace = 10
-        adaptor.upsert([DataPoint(id_to_replace, np.ones(dim), metadata={})])
+    collection = adaptor.client.collections.use(adaptor.collection_name)
+    response = collection.aggregate.over_all(total_count=True)
+    assert response.total_count == N + 1
 
-        result = collection.query.fetch_object_by_id(
-            weaviate.util.generate_uuid5(id_to_replace),
-            include_vector=True,
-        )
-        assert np.ones(dim).tolist() == result.vector["default"]
-    finally:
-        adaptor.close()
+    id_to_replace = 10
+    adaptor.upsert([DataPoint(id_to_replace, np.ones(dim), metadata={})])
+
+    result = collection.query.fetch_object_by_id(
+        weaviate.util.generate_uuid5(id_to_replace),
+        include_vector=True,
+    )
+    assert np.ones(dim).tolist() == result.vector["default"]
 
 
 def test_search(dataset):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw")
-    try:
-        idx = 117
-        vector = dataset["embedding"][idx]
-        q = Query(vector=vector)
 
-        results = adaptor.search(q, topk=3)
+    idx = 117
+    vector = dataset["embedding"][idx]
+    q = Query(vector=vector)
 
-        assert results[0].id == dataset["id"][idx]
-    finally:
-        adaptor.close()
+    results = adaptor.search(q, topk=3)
+
+    assert results[0].id == dataset["id"][idx]
 
 
 def test_delete(dataset, N):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw")
-    try:
-        adaptor.delete([117])
 
-        collection = adaptor.client.collections.use(adaptor.collection_name)
-        response = collection.aggregate.over_all(total_count=True)
-        assert response.total_count == N - 1
-    finally:
-        adaptor.close()
+    adaptor.delete([117])
+
+    collection = adaptor.client.collections.use(adaptor.collection_name)
+    response = collection.aggregate.over_all(total_count=True)
+    assert response.total_count == N - 1
 
 
 def test_delete_multiple(dataset, N):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw")
-    try:
-        ids_to_delete = [117, 199, 222, 51]
-        adaptor.delete(ids_to_delete)
 
-        collection = adaptor.client.collections.use(adaptor.collection_name)
-        response = collection.aggregate.over_all(total_count=True)
-        assert response.total_count == N - len(ids_to_delete)
-    finally:
-        adaptor.close()
+    ids_to_delete = [117, 199, 222, 51]
+    adaptor.delete(ids_to_delete)
+
+    collection = adaptor.client.collections.use(adaptor.collection_name)
+    response = collection.aggregate.over_all(total_count=True)
+    assert response.total_count == N - len(ids_to_delete)
 
 
 def test_delete_invalid(dataset, N):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw")
-    try:
-        adaptor.delete([N + 100])
+    adaptor.delete([N + 100])
 
-        collection = adaptor.client.collections.use(adaptor.collection_name)
-        response = collection.aggregate.over_all(total_count=True)
-        assert response.total_count == N
-    finally:
-        adaptor.close()
+    collection = adaptor.client.collections.use(adaptor.collection_name)
+    response = collection.aggregate.over_all(total_count=True)
+    assert response.total_count == N
 
 
 def test_stats(dataset, N, collection_name, dim):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw", collection_name=collection_name)
-    try:
-        stats = adaptor.stats()
+    stats = adaptor.stats()
 
-        assert stats["ntotal"] == N
-        assert stats["metric"] == Metric.COSINE.value
-        assert stats["collection_name"] == collection_name
-        assert stats["dim"] == dim
-    finally:
-        adaptor.close()
+    assert stats["ntotal"] == N
+    assert stats["metric"] == Metric.COSINE.value
+    assert stats["collection_name"] == collection_name
+    assert stats["dim"] == dim
 
 
 def test_full_lifecycle(collection_name, dataset, N, dim):
@@ -202,31 +185,28 @@ def test_full_lifecycle(collection_name, dataset, N, dim):
         url="http://localhost",
         collection_name=collection_name,
     )
-    try:
-        ids = np.arange(300, 304, dtype=np.int64)
-        rng = np.random.default_rng(117)
-        vectors = rng.random(size=(4, dim), dtype=np.float32)
+    ids = np.arange(300, 304, dtype=np.int64)
+    rng = np.random.default_rng(117)
+    vectors = rng.random(size=(4, dim), dtype=np.float32)
 
-        data_points = [
-            DataPoint(id=int(i), vector=vector.tolist(), metadata={}) for i, vector in zip(ids, vectors)
-        ]
-        adaptor.upsert(data_points)
+    data_points = [
+        DataPoint(id=int(i), vector=vector.tolist(), metadata={}) for i, vector in zip(ids, vectors)
+    ]
+    adaptor.upsert(data_points)
 
-        stats = adaptor.stats()
-        assert stats["ntotal"] == N + len(ids)
-        assert stats["collection_name"] == collection_name
+    stats = adaptor.stats()
+    assert stats["ntotal"] == N + len(ids)
+    assert stats["collection_name"] == collection_name
 
-        query = Query(vector=rng.random(size=(dim,), dtype=np.float32).tolist())
-        results = adaptor.search(query, topk=3)
-        assert len(results) == 3
-        # regression
-        assert results[0].id == 240
+    query = Query(vector=rng.random(size=(dim,), dtype=np.float32).tolist())
+    results = adaptor.search(query, topk=3)
+    assert len(results) == 3
+    # regression
+    assert results[0].id == 240
 
-        adaptor.delete([100, 999])
-        stats_after_delete = adaptor.stats()
-        assert stats_after_delete["ntotal"] == N + len(ids) - 1  # 999 is not a valid ID to delete, hence -1
-    finally:
-        adaptor.close()
+    adaptor.delete([100, 999])
+    stats_after_delete = adaptor.stats()
+    assert stats_after_delete["ntotal"] == N + len(ids) - 1  # 999 is not a valid ID to delete, hence -1
 
 
 @pytest.mark.parametrize(
@@ -243,14 +223,11 @@ def test_metric_mapping(collection_name, dataset, metric, expected_metric):
         collection_name=collection_name,
         index_type="hnsw",
     )
-    try:
-        collection = adaptor.client.collections.use(adaptor.collection_name)
-        collection_config = collection.config.get()
-        vector_index_config = collection_config.vector_config["default"].vector_index_config
+    collection = adaptor.client.collections.use(adaptor.collection_name)
+    collection_config = collection.config.get()
+    vector_index_config = collection_config.vector_config["default"].vector_index_config
 
-        assert vector_index_config.distance_metric.value == expected_metric
-    finally:
-        adaptor.close()
+    assert vector_index_config.distance_metric.value == expected_metric
 
 
 @pytest.mark.parametrize(
@@ -270,11 +247,9 @@ def test_index_type_mapping(collection_name, dataset, index_type, expected_index
         collection_name=collection_name,
         index_type=index_type,
     )
-    try:
-        collection = adaptor.client.collections.use(adaptor.collection_name)
-        collection_config = collection.config.get()
-        vector_index_config = collection_config.vector_config["default"].vector_index_config
 
-        assert isinstance(vector_index_config, expected_index_type)
-    finally:
-        adaptor.close()
+    collection = adaptor.client.collections.use(adaptor.collection_name)
+    collection_config = collection.config.get()
+    vector_index_config = collection_config.vector_config["default"].vector_index_config
+
+    assert isinstance(vector_index_config, expected_index_type)

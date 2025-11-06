@@ -88,7 +88,6 @@ exclude = ["tests/**"]
 select = ["ALL"]
 
 ignore = [
-    "G004", # Logger uses f string
     "ANN002", # Missing type annotation for `*args`
     "ANN003", # Missing type annotation for `**kwargs`
     "BLE001", # Do not catch blind exception: `Exception`
@@ -102,6 +101,7 @@ ignore = [
     "D213", # Multi line summary second line
     "EM101", # Separate message assignment for exception
     "FIX002", # Line contains TODO, consider resolving the issue
+    "G004", # Logger uses f string
     "N802", # Function name `xxx` should be lowercase
     "N999", # Invalid module name
     "S101", # Use of assert detected

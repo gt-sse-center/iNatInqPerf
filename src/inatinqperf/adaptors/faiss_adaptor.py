@@ -14,12 +14,21 @@ from inatinqperf.adaptors.base import (
     Query,
     SearchResult,
     VectorDatabase,
+    _extract_feature_length,
 )
 from inatinqperf.adaptors.enums import IndexTypeBase, Metric
 
 # Process large datasets in chunks to keep peak FAISS ingest memory bounded.
 _DEFAULT_BATCH_SIZE = 8192
 Batch = tuple[np.ndarray, np.ndarray]
+
+
+def _arrow_backend(dataset: HuggingFaceDataset) -> object | None:
+    """Return the underlying Arrow table for compatibility across datasets versions."""
+    arrow_data = getattr(dataset, "data", None)
+    if arrow_data is None:
+        arrow_data = getattr(dataset, "_data", None)
+    return arrow_data
 
 
 class FaissIndexType(IndexTypeBase):
@@ -327,8 +336,15 @@ def _arrow_array_to_numpy(
 
 def _embedding_feature_length(dataset: HuggingFaceDataset) -> int:
     """Return embedding dimensionality hint from dataset features."""
-    feature = dataset.features.get("embedding") if hasattr(dataset, "features") else None
-    length = getattr(getattr(feature, "feature", None), "length", -1)
+    features = getattr(dataset, "features", None)
+    feature = None
+    if features is not None:
+        try:
+            feature = features["embedding"]
+        except (KeyError, TypeError):
+            feature = getattr(features, "get", lambda *_: None)("embedding")
+
+    length = _extract_feature_length(feature) if feature is not None else None
     return int(length) if isinstance(length, int) and length > 0 else -1
 
 
@@ -388,7 +404,7 @@ def _iter_dataset_batches(
     progress = tqdm(total=total, desc=desc, unit="vec") if show_progress else None
 
     try:
-        arrow_data = getattr(dataset, "data", None)
+        arrow_data = _arrow_backend(dataset)
         if arrow_data is not None and hasattr(arrow_data, "to_batches"):
             # Hugging Face datasets expose their Arrow table via .data; iterate batches directly.
             table = arrow_data
@@ -429,7 +445,7 @@ def _iter_dataset_batches(
 
 def _extract_embeddings(dataset: HuggingFaceDataset) -> np.ndarray:
     """Extract embeddings as a 2D float32 NumPy array without materialising Python lists."""
-    arrow_data = getattr(dataset, "data", None)
+    arrow_data = _arrow_backend(dataset)
     if arrow_data is not None and hasattr(arrow_data, "column"):
         try:
             # Prefer Arrow-backed buffers so training can proceed without extra copies.

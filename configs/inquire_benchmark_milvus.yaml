@@ -81,6 +81,8 @@ vectordb:
 search:
   topk: 10
   queries_file: benchmark/queries.txt
+  filters:
+    acceptable_iconic_groups: ["Mammals"]
 
 update:
   add_count: 50

@@ -8,6 +8,7 @@ from loguru import logger
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, PointStruct
 from tqdm import tqdm
+from qdrant_client.models import Distance, PointStruct, Filter, FieldCondition, MatchAny
 
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
@@ -160,14 +161,29 @@ class Qdrant(VectorDatabase):
         # Has support for attribute filter: https://qdrant.tech/documentation/quickstart/#add-a-filter
 
         ef = kwargs.get("ef", 128)
-        search_result = self.client.query_points(
-            collection_name=self.collection_name,
-            query=q.vector,
-            with_payload=False,
-            with_vectors=False,
-            limit=topk,
-            search_params=models.SearchParams(hnsw_ef=ef, exact=False),
-        )
+        if q.filters is None:
+            search_result = self.client.query_points(
+                collection_name=self.collection_name,
+                query=q.vector,
+                with_payload=False,
+                with_vectors=False,
+                limit=topk,
+                search_params=models.SearchParams(hnsw_ef=ef, exact=False),
+            )
+        else:
+            iconic_group_filter = FieldCondition(
+                key="iconic_group", match=MatchAny(any_values=q.filters.acceptable_iconic_groups)
+            )
+            final_filter = Filter(must=[iconic_group_filter])
+            search_result = self.client.query_points(
+                collection_name=self.collection_name,
+                query=q.vector,
+                query_filter=final_filter,
+                with_payload=False,
+                with_vectors=False,
+                limit=topk,
+                search_params=models.SearchParams(hnsw_ef=ef, exact=False),
+            )
 
         return [SearchResult(point.id, point.score) for point in search_result.points]
 

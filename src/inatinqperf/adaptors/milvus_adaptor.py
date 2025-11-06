@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import IndexTypeBase, Metric
+from inatinqperf.adaptors.filter import Filter
 
 
 class MilvusIndexType(IndexTypeBase):
@@ -83,6 +84,11 @@ class Milvus(VectorDatabase):
                 datatype=DataType.FLOAT_VECTOR,
                 dim=self.dim,
             )
+            .add_field(
+                field_name="iconic_group",
+                datatype=DataType.VARCHAR,
+                max_length=256,
+            )
         )
 
         # This calls `.add_index` internally
@@ -140,17 +146,26 @@ class Milvus(VectorDatabase):
 
         The score returned in this case is the distance, so smaller is better.
         """
-        results = self.client.search(
-            collection_name=self.collection_name,
-            anns_field="vector",
-            data=[q.vector],
-            limit=topk,
-            search_params={
-                "metric_type": self._translate_metric(self.metric),
-            },
-        )
+        results = []
+
+        if q.filters is None:
+            results = self.client.search(
+                collection_name=self.collection_name,
+                anns_field="vector",
+                data=[q.vector],
+                limit=topk,
+                search_params={
+                    "metric_type": self._translate_metric(self.metric),
+                },
+            )
+
+        else:
+            results = self._search_with_filters(q, topk, **kwargs)
 
         search_results = []
+
+        if len(results) == 0:
+            return search_results
 
         # `results` should only have a single value
         result = results[0]
@@ -161,6 +176,20 @@ class Milvus(VectorDatabase):
             search_results.append(SearchResult(id=hit_id, score=hit_distance))
 
         return search_results
+
+    def _search_with_filters(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
+        """Search for top-k nearest neighbors with filters."""
+        filter_string = "iconic_group IN {iconic_groups}"
+        filter_params = {"iconic_groups": q.filters.acceptable_iconic_groups}
+
+        return self.client.search(
+            collection_name=self.collection_name,
+            anns_field="vector",
+            data=[q.vector],
+            filter=filter_string,
+            filter_params=filter_params,
+            limit=topk,
+        )
 
     def stats(self) -> None:
         """Return index statistics."""

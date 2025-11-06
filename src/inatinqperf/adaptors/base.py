@@ -3,10 +3,12 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Optional
 
 from datasets import Dataset as HuggingFaceDataset
 
 from inatinqperf.adaptors.enums import Metric
+from inatinqperf.adaptors.filter import Filter
 
 
 @dataclass
@@ -23,7 +25,7 @@ class Query:
     """A class encapsulating the query vector and optional filters."""
 
     vector: Sequence[float]
-    filters: object | None = None
+    filters: Optional[Filter] = None
 
 
 @dataclass

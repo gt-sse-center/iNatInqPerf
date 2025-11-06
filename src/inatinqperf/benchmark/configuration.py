@@ -63,11 +63,18 @@ class VectorDatabaseConfig(BaseModel):
     params: VectorDatabaseParams
 
 
+class FilterConfig(BaseModel):
+    """Configuration for filters."""
+
+    acceptable_iconic_groups: list[NonEmptyStr]
+
+
 class SearchParams(BaseModel):
     """Configuration for search parameters."""
 
     topk: int
     queries_file: Path
+    filters: FilterConfig | None
 
 
 class ContainerHealthCheck(BaseModel):

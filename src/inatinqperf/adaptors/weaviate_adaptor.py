@@ -158,9 +158,20 @@ class Weaviate(VectorDatabase):
         """Search for the `topk` nearest vectors based on the query point `q`."""
 
         collection = self.client.collections.use(self.collection_name)
-        response = collection.query.near_vector(
-            near_vector=q.vector, limit=topk, return_metadata=MetadataQuery(distance=True, score=True)
-        )
+        if q.filters is None:
+            response = collection.query.near_vector(
+                near_vector=q.vector, limit=topk, return_metadata=MetadataQuery(distance=True, score=True)
+            )
+        else:
+            iconic_group_filter = Filter.by_property("iconic_group").contains_any(
+                q.filters.acceptable_iconic_groups
+            )
+            response = collection.query.near_vector(
+                near_vector=q.vector,
+                filters=iconic_group_filter,
+                limit=topk,
+                return_metadata=MetadataQuery(distance=True, score=True),
+            )
 
         return [SearchResult(id=o.properties["dataset_id"], score=o.metadata.score) for o in response.objects]
 

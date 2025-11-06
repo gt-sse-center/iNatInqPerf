@@ -32,6 +32,7 @@ class ImageDatasetWithEmbeddings:
     embeddings: np.ndarray
     ids: Sequence[int] | np.ndarray
     labels: Sequence[int | str] | np.ndarray
+    iconic_groups: Sequence[str]
 
 
 class PretrainedCLIPModel:
@@ -84,7 +85,7 @@ def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> ImageDatasetW
 
     imgs = [pilify(r["image"]) for r in ds]
 
-    embeddings, ids, labels = [], [], []
+    embeddings, ids, labels, iconic_groups = [], [], [], []
     for i in tqdm(range(0, len(imgs), batch_size)):
         batch_imgs = imgs[i : i + batch_size]
         with torch.no_grad():
@@ -95,6 +96,8 @@ def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> ImageDatasetW
         labels.extend(
             [int(ds[i + j].get("label", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
         )
+
+        iconic_groups.extend([ds[i + j].get("iconic_group", "") for j in range(len(batch_imgs))])
 
     if embeddings:
         x = np.concatenate(embeddings, axis=0)
@@ -109,7 +112,7 @@ def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> ImageDatasetW
                 dim = int(getattr(config, "projection_dim", 0) or getattr(config, "hidden_size", 0))
         x = np.empty((0, max(dim, 0)), dtype=np.float32)
 
-    return ImageDatasetWithEmbeddings(x, ids, np.asarray(labels))
+    return ImageDatasetWithEmbeddings(x, ids, np.asarray(labels), iconic_groups)
 
 
 def embed_text(queries: list[str], model_id: str, batch_size: int = 128) -> np.ndarray:
@@ -151,6 +154,7 @@ def to_huggingface_dataset(
             "id": Value("int64"),
             "label": label_feature,
             "embedding": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
+            "iconic_group": Value("string"),
         },
     )
     return Dataset.from_dict(
@@ -158,6 +162,7 @@ def to_huggingface_dataset(
             "id": dataset.ids,
             "label": label_values,
             "embedding": dataset.embeddings,
+            "iconic_group": dataset.iconic_groups,
         },
         features=feats,
     )

@@ -11,6 +11,7 @@ from loguru import logger
 from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS, DataPoint, Faiss, Query, SearchResult, VectorDatabase
+from inatinqperf.adaptors.filter import Filter
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.benchmark.container import container_context
 from inatinqperf.utils import (
@@ -143,6 +144,11 @@ class Benchmarker:
         model_id = self.cfg.embedding.model_id
 
         topk = self.cfg.search.topk
+        filters = None
+
+        if self.cfg.search.filters is not None:
+            acceptable_iconic_groups = self.cfg.search.filters.acceptable_iconic_groups
+            filters = Filter(acceptable_iconic_groups=acceptable_iconic_groups)
 
         dataset_dir = self.base_path / self.cfg.dataset.directory
         ds = Dataset.load_from_disk(dataset_dir)
@@ -160,7 +166,7 @@ class Benchmarker:
         with Profiler("search-baseline-FaissFlat") as p:
             i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
             for i in tqdm(range(q.shape[0])):
-                base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
+                base_results = baseline_vectordb.search(Query(vector=q[i], filters=filters), topk)  # exact
                 padded = _ids_to_fixed_array(base_results, topk)
                 i0[i] = padded
 
@@ -170,7 +176,7 @@ class Benchmarker:
             latencies = []
             for i in tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
-                vectordb.search(Query(q[i]), topk, **params.to_dict())
+                vectordb.search(Query(vector=q[i], filters=filters), topk, **params.to_dict())
                 latencies.append((time.perf_counter() - t0) * 1000.0)
 
             p.sample()
@@ -179,7 +185,7 @@ class Benchmarker:
         # For simplicity compute approximate on whole Q at once:
         i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
         for i in tqdm(range(q.shape[0])):
-            results = vectordb.search(Query(q[i]), topk, **params.to_dict())
+            results = vectordb.search(Query(vector=q[i], filters=filters), topk, **params.to_dict())
             padded = _ids_to_fixed_array(results, topk)
             i1[i] = padded
         rec = recall_at_k(i1, i0, topk)

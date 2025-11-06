@@ -188,6 +188,10 @@ class Faiss(VectorDatabase):
             f"(using all vectors, effective_nlist={effective_nlist})"
         )
         # FAISS training expects a contiguous block; we now feed every vector.
+        # Train the index
+        logger.info(
+            f"Training IVFPQ with embeddings of shape {full_embeddings.shape} {full_embeddings.dtype}"
+        )
         index.train(full_embeddings)
         # Release the training matrix before streaming ingestion to reduce peak memory.
         del full_embeddings

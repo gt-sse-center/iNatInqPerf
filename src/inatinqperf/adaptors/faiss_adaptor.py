@@ -168,8 +168,6 @@ class Faiss(VectorDatabase):
 
         index = faiss.IndexIDMap2(base)
 
-        ivf = _unwrap_to_ivf(index.index)
-
         # Extract the entire embedding matrix once for training; this prefers zero-copy Arrow buffers.
         full_embeddings = _extract_embeddings(dataset)
         if full_embeddings.size == 0:

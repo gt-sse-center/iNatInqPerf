@@ -3,6 +3,7 @@
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import yaml
@@ -11,7 +12,6 @@ from loguru import logger
 from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS, DataPoint, Faiss, Query, SearchResult, VectorDatabase
-from inatinqperf.adaptors.enums import Metric
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.benchmark.container import container_context
 from inatinqperf.utils import (
@@ -24,6 +24,9 @@ from inatinqperf.utils import (
     load_huggingface_dataset,
     to_huggingface_dataset,
 )
+
+if TYPE_CHECKING:
+    from inatinqperf.adaptors.enums import Metric
 
 
 class Benchmarker:
@@ -125,13 +128,7 @@ class Benchmarker:
 
         vectordb_cls = self._resolve_vectordb_class(vdb_type)
         init_params = self.cfg.vectordb.params.to_dict()
-        metric_value = init_params.pop("metric", None)
-
-        if metric_value is None:
-            msg = "Vector database metric must be specified in the configuration."
-            raise ValueError(msg)
-
-        metric = metric_value if isinstance(metric_value, Metric) else Metric(metric_value)
+        metric: Metric = init_params.pop("metric")
 
         with Profiler(f"build-{vdb_type}", containers=self.container_configs):
             vdb = vectordb_cls(dataset=dataset, metric=metric, **init_params)

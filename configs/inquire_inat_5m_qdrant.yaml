@@ -31,7 +31,7 @@ vectordb:
     metric: cosine
     m: 64
     ef: 32
-    batch_size: 1000
+    batch_size: 2048
 
 search:
   topk: 10

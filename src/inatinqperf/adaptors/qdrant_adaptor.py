@@ -3,9 +3,11 @@
 from collections.abc import Generator, Sequence
 from itertools import islice
 
+import numpy as np
 from loguru import logger
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, PointStruct
+from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
@@ -33,7 +35,7 @@ class Qdrant(VectorDatabase):
     ) -> None:
         super().__init__(dataset, metric)
 
-        self.client = QdrantClient(url=url, port=port)
+        self.client = QdrantClient(url=url, port=port, https=False)
         self.collection_name = collection_name
 
         self.m = m
@@ -48,37 +50,50 @@ class Qdrant(VectorDatabase):
             f"Creating collection {collection_name}"
         )
 
-        qdrant_index_params = models.HnswConfigDiff(
-            m=m,
+        vectors_config = models.VectorParams(
+            size=self.dim,
+            distance=self._translate_metric(metric),
+            on_disk=True,  # save to disk immediately
+        )
+
+        index_params = models.HnswConfigDiff(
+            m=0,  # disable indexing until dataset upload is complete
             ef_construct=ef,
             max_indexing_threads=0,
-            on_disk=False,
+            on_disk=True,  # Store index on disk
         )
 
         self.client.create_collection(
             collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=self.dim,
-                distance=self._translate_metric(metric),
-                hnsw_config=qdrant_index_params,
-            ),
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
             shard_number=2,  # reasonable default as per qdrant docs
         )
 
         # Batch insert dataset
-        for batch in self._batched(dataset, batch_size):
-            ids = [point.pop("id") for point in batch]
-            vectors = [point.pop("embedding") for point in batch]
+        batched_dataset = dataset.batch(batch_size=batch_size)
+        num_batches = int(np.ceil(len(dataset) / batch_size))
+        for batch in tqdm(batched_dataset, total=num_batches):
+            ids = batch["id"]
+            vectors = batch["embedding"]
 
             self.client.upsert(
                 collection_name=collection_name,
                 points=models.Batch(
                     ids=ids,
                     vectors=vectors,
-                    payloads=batch,
                 ),
             )
 
+        # Set the indexing params
+        index_params.m = m
+        self.client.update_collection(
+            collection_name=collection_name,
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
+        )
+
+        # Log the number of point uploaded
         num_points_in_db = self.client.count(
             collection_name=collection_name,
             exact=True,

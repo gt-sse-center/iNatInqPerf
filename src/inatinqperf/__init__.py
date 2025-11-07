@@ -1,10 +1,9 @@
 """Package level __init__."""
 
 from importlib.metadata import version
+from sys import platform
 
 __version__ = version("inatinqperf")
-
-from sys import platform
 
 # On MacOS multiple linking of OpenMP happens and causes the program to segfault.
 # Setting the KMP_DUPLICATE_LIB_OK environment variable seems to be the best workaround.

@@ -15,6 +15,7 @@ containers:
     hostname: "localhost"
     ports:
       6333: 6333
+      6334: 6334
     # environment:
     # volumes:
     # command:

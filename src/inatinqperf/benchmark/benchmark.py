@@ -15,14 +15,12 @@ from inatinqperf.adaptors import VECTORDBS, DataPoint, Faiss, Query, SearchResul
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.benchmark.container import container_context
 from inatinqperf.utils import (
-    ImageDatasetWithEmbeddings,
     Profiler,
     embed_images,
     embed_text,
     export_images,
     get_table,
     load_huggingface_dataset,
-    to_huggingface_dataset,
 )
 
 if TYPE_CHECKING:
@@ -97,13 +95,13 @@ class Benchmarker:
         logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
         with Profiler("embed-images", containers=self.container_configs):
-            dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
+            dse: Dataset = embed_images(dataset_dir, model_id, batch_size)
 
         return self.save_as_huggingface_dataset(dse, embeddings_dir=embeddings_dir)
 
     def save_as_huggingface_dataset(
         self,
-        dse: ImageDatasetWithEmbeddings,
+        ds: Dataset,
         embeddings_dir: Path | None = None,
     ) -> Dataset:
         """Convert to HuggingFace dataset format and save to `embeddings_dir`."""
@@ -114,12 +112,11 @@ class Benchmarker:
         ensure_dir(embeddings_dir)
 
         logger.info(f"Saving dataset to {embeddings_dir}")
-        huggingface_dataset: Dataset = to_huggingface_dataset(dse)
-        huggingface_dataset.save_to_disk(embeddings_dir)
+        ds.save_to_disk(embeddings_dir)
 
-        logger.info(f"Embeddings: {dse.embeddings.shape} -> {embeddings_dir}")
+        logger.info(f"Embeddings: {len(ds['embedding'][0])} -> {embeddings_dir}")
 
-        return huggingface_dataset.with_format("numpy")
+        return ds
 
     def build(self, dataset: Dataset) -> VectorDatabase:
         """Build index for the specified vectordb."""
@@ -145,6 +142,8 @@ class Benchmarker:
 
         logger.info(f"Stats: {vdb.stats()}")
 
+        # Emit a closing marker so benchmark logs clearly delimit setup time.
+        logger.info(f"Exiting building {vdb_type} vector database")
         return vdb
 
     @staticmethod
@@ -223,8 +222,6 @@ class Benchmarker:
             i1[i] = padded
         rec = recall_at_k(i1, i0, topk)
 
-        x = np.asarray(dataset["embedding"], dtype=np.float32)
-
         stats = {
             "vectordb": self.cfg.vectordb.type,
             "index_type": self.cfg.vectordb.params.index_type,
@@ -233,7 +230,8 @@ class Benchmarker:
             "lat_ms_p50": float(np.percentile(latencies, 50)),
             "lat_ms_p95": float(np.percentile(latencies, 95)),
             "recall@k": rec,
-            "ntotal": int(x.shape[0]),
+            # Use dataset length directly to avoid materialising the embeddings again.
+            "ntotal": len(dataset),
         }
 
         # Make values as lists so `tabulate` can print properly.
@@ -259,7 +257,10 @@ class Benchmarker:
         rng = np.random.default_rng(42)
         add_vecs = x[:add_n].copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
-        add_ids = [next_id + i for i in range(add_n)]
+        # Pick new ids beyond the current dataset to avoid collisions during updates.
+        existing_ids = np.asarray(dataset["id"]) if len(dataset) else np.array([], dtype=int)
+        start_id = int(np.max(existing_ids)) + 1 if existing_ids.size else 0
+        add_ids = list(range(start_id, start_id + add_n))
 
         with Profiler(f"update-add-{vdb_type}", containers=self.container_configs):
             data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]

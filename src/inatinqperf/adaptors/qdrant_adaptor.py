@@ -1,7 +1,6 @@
 """Qdrant vector database adaptor."""
 
 from collections.abc import Generator, Sequence
-from itertools import islice
 
 import numpy as np
 from loguru import logger
@@ -35,7 +34,7 @@ class Qdrant(VectorDatabase):
     ) -> None:
         super().__init__(dataset, metric)
 
-        self.client = QdrantClient(url=url, port=port, https=False)
+        self.client = QdrantClient(url=url, port=port, prefer_grpc=True)
         self.collection_name = collection_name
 
         self.m = m
@@ -85,11 +84,9 @@ class Qdrant(VectorDatabase):
             )
 
         # Set the indexing params
-        index_params.m = m
         self.client.update_collection(
             collection_name=collection_name,
-            vectors_config=vectors_config,
-            hnsw_config=index_params,
+            hnsw_config=models.HnswConfigDiff(m=m),
         )
 
         # Log the number of point uploaded
@@ -98,12 +95,6 @@ class Qdrant(VectorDatabase):
             exact=True,
         ).count
         logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
-
-    @staticmethod
-    def _batched(iterable: HuggingFaceDataset, n: int) -> Generator[object]:
-        iterator = iter(iterable)
-        while batch := list(islice(iterator, n)):
-            yield batch
 
     @staticmethod
     def _translate_metric(metric: Metric) -> Distance:

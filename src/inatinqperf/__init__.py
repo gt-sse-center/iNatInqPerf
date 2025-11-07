@@ -5,8 +5,6 @@ from sys import platform
 
 __version__ = version("inatinqperf")
 
-from sys import platform
-
 # On MacOS multiple linking of OpenMP happens and causes the program to segfault.
 # Setting the KMP_DUPLICATE_LIB_OK environment variable seems to be the best workaround.
 # Please see: https://github.com/dmlc/xgboost/issues/1715

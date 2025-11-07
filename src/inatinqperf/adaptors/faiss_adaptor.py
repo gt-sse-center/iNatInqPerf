@@ -137,7 +137,8 @@ class Faiss(VectorDatabase):
         nprobe: int,
         batch_size: int,
     ) -> faiss.Index:
-        n = len(dataset)
+        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
+        n = embeddings.shape[0]
 
         # Since FAISS hardcodes the minimum number
         # of clustering points to 39, we make sure
@@ -160,13 +161,6 @@ class Faiss(VectorDatabase):
         base = faiss.index_factory(dim, desc, metric_type)
         index = faiss.IndexIDMap2(base)
 
-        # Extract the entire embedding matrix once for training using zero-copy contiguous arrays.
-        embeddings = np.asarray(dataset["embedding"], dtype=np.float32, order="C")
-        if embeddings.size == 0:
-            msg = "No embeddings available to train the FAISS index."
-            raise ValueError(msg)
-
-        # FAISS training expects a contiguous block; we now feed every vector.
         # Train the index
         logger.info(f"Training IVFPQ with embeddings of shape {embeddings.shape} {embeddings.dtype}")
         index.train(embeddings)

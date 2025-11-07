@@ -61,10 +61,10 @@ def query_fixture():
 
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
-def test_faiss_flat_lifecycle(metric, small_data, query):
-    vdb = Faiss(small_data, metric=metric, index_type="FLAT")
+def test_faiss_flat_lifecycle(metric, ivfpq_trainset, query):
+    vdb = Faiss(ivfpq_trainset, metric=metric, index_type="IVFPQ", m=1)
 
-    ids = small_data["id"]
+    ids = ivfpq_trainset["id"]
     st = vdb.stats()
     assert st["ntotal"] == len(ids)
 
@@ -73,12 +73,15 @@ def test_faiss_flat_lifecycle(metric, small_data, query):
     # shape checks
     assert len(results) == 2
 
-    # nearest to [1,0] should be id=100
-    assert results[0].id == 100
+    # regression: nearest to [1,0]
+    if metric == Metric.INNER_PRODUCT:
+        assert results[0].id == 11011
+    if metric == Metric.L2:
+        assert results[0].id == 6027
 
     # delete some ids
-    vdb.delete([101, 103])
-    assert vdb.stats()["ntotal"] == 2
+    vdb.delete([1101, 1103])
+    assert vdb.stats()["ntotal"] == (len(ivfpq_trainset) - 2)
 
 
 def test_faiss_ivfpq_build_and_search_with_large_training(ivfpq_trainset, small_data, query):

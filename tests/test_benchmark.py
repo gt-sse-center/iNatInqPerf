@@ -10,7 +10,6 @@ from inatinqperf.adaptors.base import SearchResult
 from inatinqperf.adaptors.enums import Metric
 from inatinqperf.benchmark import Benchmarker, benchmark
 from inatinqperf.benchmark.configuration import VectorDatabaseParams
-from inatinqperf.utils.embed import ImageDatasetWithEmbeddings
 
 
 @pytest.fixture(name="data_path", scope="session")
@@ -134,12 +133,14 @@ def test_embed_preexisting(tmp_path, config_yaml, caplog, monkeypatch):
 def test_save_as_huggingface_dataset(config_yaml, tmp_path):
     benchmarker = Benchmarker(config_yaml, base_path=tmp_path)
 
-    dse = ImageDatasetWithEmbeddings(
-        np.random.default_rng(42).random((2, 3), dtype=np.float32),
-        [10, 11],
-        [0, 1],
+    ds = HuggingFaceDataset.from_dict(
+        {
+            "id": [10, 11],
+            "embedding": np.random.default_rng(42).random((2, 3), dtype=np.float32).tolist(),
+            "label": [0, 1],
+        }
     )
-    benchmarker.save_as_huggingface_dataset(dse)
+    benchmarker.save_as_huggingface_dataset(ds)
 
     embedding_dir = tmp_path / "data" / "inquire_benchmark" / "emb"
     assert embedding_dir.exists()

@@ -1,5 +1,6 @@
 """Qdrant vector database adaptor."""
 
+import time
 from collections.abc import Generator, Sequence
 
 import numpy as np
@@ -66,7 +67,7 @@ class Qdrant(VectorDatabase):
             collection_name=collection_name,
             vectors_config=vectors_config,
             hnsw_config=index_params,
-            shard_number=2,  # reasonable default as per qdrant docs
+            shard_number=4,  # reasonable default as per qdrant docs
         )
 
         # Batch insert dataset
@@ -96,6 +97,10 @@ class Qdrant(VectorDatabase):
         ).count
         logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
 
+        logger.info("Waiting for indexing to complete")
+        self.wait_for_index_ready(collection_name)
+        logger.info("Indexing complete!")
+
     @staticmethod
     def _translate_metric(metric: Metric) -> Distance:
         """Helper method to convert from Metric enum to Qdrant Distance."""
@@ -110,6 +115,21 @@ class Qdrant(VectorDatabase):
 
         msg = f"{metric} metric specified is not a valid one for Qdrant."
         raise ValueError(msg)
+
+    def wait_for_index_ready(self, collection_name: str, poll_interval: float = 5.0) -> None:
+        """Wait until Qdrant reports the collection is fully indexed and ready."""
+        while True:
+            info = self.client.get_collection(collection_name)
+
+            status = info.status
+            optimizer_status = info.optimizer_status
+
+            if status == "green" and optimizer_status == "ok":
+                logger.info(f"✅ Index for '{collection_name}' is ready!")
+                break
+
+            logger.info(f"⏳ Waiting... status={status}, optimizer_status={optimizer_status}")
+            time.sleep(poll_interval)
 
     @staticmethod
     def _points_iterator(data_points: Sequence[DataPoint]) -> Generator[PointStruct]:

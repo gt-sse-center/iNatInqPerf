@@ -71,9 +71,8 @@ class Qdrant(VectorDatabase):
         )
 
         # Batch insert dataset
-        batched_dataset = dataset.batch(batch_size=batch_size)
         num_batches = int(np.ceil(len(dataset) / batch_size))
-        for batch in tqdm(batched_dataset, total=num_batches):
+        for batch in tqdm(dataset.iter(batch_size=batch_size), total=num_batches):
             ids = batch["id"]
             vectors = batch["embedding"]
 

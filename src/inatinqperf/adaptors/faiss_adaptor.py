@@ -122,7 +122,6 @@ class Faiss(VectorDatabase):
             batch_size=batch_size,
         )
         index = dataset.get_index("embedding").faiss_index
-
         logger.info(f"Built Faiss FLAT index with {len(dataset)} vectors")
 
         return index
@@ -159,11 +158,10 @@ class Faiss(VectorDatabase):
             metric_type = faiss.METRIC_L2
 
         base = faiss.index_factory(dim, desc, metric_type)
-
         index = faiss.IndexIDMap2(base)
 
         # Extract the entire embedding matrix once for training using zero-copy contiguous arrays.
-        embeddings = np.asarray(dataset["embeddings"], dtype=np.float32, order="C", copy=False)
+        embeddings = np.asarray(dataset["embedding"], dtype=np.float32, order="C")
         if embeddings.size == 0:
             msg = "No embeddings available to train the FAISS index."
             raise ValueError(msg)
@@ -176,8 +174,12 @@ class Faiss(VectorDatabase):
         del embeddings
 
         logger.info(f"Adding {len(dataset)} vectors to Faiss IVFPQ index (batch_size={batch_size})")
-        batched_dataset = dataset.batch(batch_size=batch_size)
-        for batch in tqdm(batched_dataset, desc="FAISS IVFPQ ingest", total=len(dataset) // batch_size):
+        num_batches = int(np.ceil(len(dataset) / batch_size))
+        for batch in tqdm(
+            dataset.iter(batch_size=batch_size),
+            desc="FAISS IVFPQ ingest",
+            total=num_batches,
+        ):
             ids = np.asarray(batch["id"], dtype=np.int64, order="C")
             embeddings = np.asarray(batch["embedding"], dtype=np.float32, order="C")
             # Stream batches straight into the index to avoid a monolithic array.
@@ -211,7 +213,11 @@ class Faiss(VectorDatabase):
         ids = np.asarray(ids, dtype=np.int64, order="C")
         vectors = np.asarray(vectors, dtype=np.float32, order="C")
         self.index.remove_ids(faiss.IDSelectorArray(ids))
-        self.index.add_with_ids(vectors, ids)
+
+        if isinstance(self.index, faiss.IndexFlat):
+            self.index.add(vectors)
+        else:
+            self.index.add_with_ids(vectors, ids)
 
     def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
         """Search for top-k nearest neighbors."""
@@ -252,7 +258,11 @@ class Faiss(VectorDatabase):
 
     def stats(self) -> dict[str, object]:
         """Return index statistics."""
-        ivf = _unwrap_to_ivf(self.index.index) if self.index is not None else None
+        if self.index_type == FaissIndexType.FLAT:
+            ivf = None
+        else:
+            ivf = _unwrap_to_ivf(self.index.index) if self.index is not None else None
+
         return {
             "ntotal": int(self.index.ntotal),
             "kind": self.index_type.value,

@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import numpy as np
 from datasets import Dataset as HuggingFaceDataset
 
 from inatinqperf.adaptors.enums import Metric
@@ -63,7 +62,7 @@ class VectorDatabase(ABC):
         """
         # Will raise exception if `metric` is not valid.
         self.metric = Metric(metric)
-        self.dim = self._infer_dim(dataset)
+        self.dim = len(dataset["embedding"][0])
 
     @staticmethod
     @abstractmethod
@@ -110,60 +109,3 @@ class VectorDatabase(ABC):
     def __del__(self) -> None:
         """Destructor method, which automatically closes any open connections."""
         self.close()
-
-    @staticmethod
-    def _infer_dim(dataset: HuggingFaceDataset) -> int:
-        """Infer embedding dimensionality without materialising the full dataset."""
-
-        # Prefer schema metadata from Hugging Face datasets to avoid materialising any rows.
-        embedding_feature = None
-        features = getattr(dataset, "features", None)
-        if features is not None:
-            try:
-                embedding_feature = features["embedding"]
-            except (KeyError, TypeError):
-                embedding_feature = getattr(features, "get", lambda *_: None)("embedding")
-
-        if embedding_feature is not None:
-            length = _extract_feature_length(embedding_feature)
-            if isinstance(length, int) and length > 0:
-                return length
-
-        if len(dataset) == 0:
-            return 0
-
-        first_embedding = dataset[0]["embedding"]
-        if isinstance(first_embedding, np.ndarray):
-            return int(first_embedding.shape[-1])
-        # Some datasets expose embeddings as lists; use the list length as a last resort.
-        return len(first_embedding)
-
-
-def _extract_feature_length(feature: object) -> int | None:
-    """Extract the declared length from a Hugging Face feature definition."""
-    # Sequence objects expose .length and .feature; guard because some builds raise KeyError.
-    try:
-        inner = feature.feature  # type: ignore[attr-defined]
-    except AttributeError:
-        inner = None
-
-    if inner is not None:
-        length = getattr(inner, "length", None)
-        if isinstance(length, int) and length > 0:
-            return length
-
-    length_attr = getattr(feature, "length", None)
-    if isinstance(length_attr, int) and length_attr > 0:
-        return length_attr
-
-    if isinstance(feature, dict):
-        inner = feature.get("feature")
-        if inner is not None:
-            length = getattr(inner, "length", None)
-            if isinstance(length, int) and length > 0:
-                return length
-        length = feature.get("length")
-        if isinstance(length, int) and length > 0:
-            return length
-
-    return None

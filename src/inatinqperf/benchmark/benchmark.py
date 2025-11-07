@@ -14,14 +14,12 @@ from inatinqperf.adaptors import VECTORDBS, DataPoint, Faiss, Query, SearchResul
 from inatinqperf.benchmark.configuration import Config
 from inatinqperf.benchmark.container import container_context
 from inatinqperf.utils import (
-    ImageDatasetWithEmbeddings,
     Profiler,
     embed_images,
     embed_text,
     export_images,
     get_table,
     load_huggingface_dataset,
-    to_huggingface_dataset,
 )
 
 
@@ -89,13 +87,13 @@ class Benchmarker:
         logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
         with Profiler("embed-images"):
-            dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
+            dse: Dataset = embed_images(dataset_dir, model_id, batch_size)
 
         return self.save_as_huggingface_dataset(dse, embeddings_dir=embeddings_dir)
 
     def save_as_huggingface_dataset(
         self,
-        dse: ImageDatasetWithEmbeddings,
+        ds: Dataset,
         embeddings_dir: Path | None = None,
     ) -> Dataset:
         """Convert to HuggingFace dataset format and save to `embeddings_dir`."""
@@ -106,12 +104,11 @@ class Benchmarker:
         ensure_dir(embeddings_dir)
 
         logger.info(f"Saving dataset to {embeddings_dir}")
-        huggingface_dataset: Dataset = to_huggingface_dataset(dse)
-        huggingface_dataset.save_to_disk(embeddings_dir)
+        ds.save_to_disk(embeddings_dir)
 
-        logger.info(f"Embeddings: {dse.embeddings.shape} -> {embeddings_dir}")
+        logger.info(f"Embeddings: {len(ds['embedding'][0])} -> {embeddings_dir}")
 
-        return huggingface_dataset.with_format("numpy")
+        return ds
 
     def build(self, dataset: Dataset) -> VectorDatabase:
         """Build index for the specified vectordb."""

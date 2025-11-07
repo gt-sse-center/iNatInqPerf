@@ -1,13 +1,11 @@
 """Utilities for embedding images and text using CLIP models."""
 
-from collections.abc import Sequence
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
-from datasets import Dataset, Features, Value, load_from_disk
-from datasets import Sequence as HFSequence
+from datasets import Dataset, DatasetInfo, Features, Value, load_from_disk
+from datasets import List as HFList
 from loguru import logger
 from PIL import Image
 from tqdm import tqdm
@@ -24,15 +22,6 @@ def pilify(img: Image.Image | np.ndarray) -> Image.Image:
         return Image.fromarray(img).convert("RGB")
     msg = "Expected PIL.Image or numpy.ndarray"
     raise TypeError(msg)
-
-
-@dataclass
-class ImageDatasetWithEmbeddings:
-    """An image dataset with embeddings, IDs and labels."""
-
-    embeddings: np.ndarray
-    ids: Sequence[int] | np.ndarray
-    labels: Sequence[int | str] | np.ndarray
 
 
 class PretrainedCLIPModel:
@@ -78,40 +67,57 @@ class PretrainedCLIPModel:
         return normalized_feats.cpu().numpy().astype(np.float32)
 
 
-def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> ImageDatasetWithEmbeddings:
+def embed_images(raw_dir: Path, model_id: str, batch_size: int) -> Dataset:
     """Embed images from a dataset on disk using a CLIP model."""
     ds = load_from_disk(raw_dir)
 
+    if len(ds) == 0:
+        raise ValueError("Dataset is empty")
+
     model = PretrainedCLIPModel(model_id=model_id)
 
-    imgs = [pilify(r["image"]) for r in ds]
+    def processor():  # noqa: ANN202
+        """A generator to process the dataset images."""
+        num_batches = int(np.ceil(len(ds) / batch_size))
+        idx = 0
 
-    embeddings, ids, labels = [], [], []
-    for i in tqdm(range(0, len(imgs), batch_size)):
-        batch_imgs = imgs[i : i + batch_size]
-        with torch.no_grad():
-            feats = model(images=batch_imgs)
-            embeddings.append(feats)
+        for batch in tqdm(ds.iter(batch_size=batch_size), total=num_batches):
+            sz = len(batch["image"])
+            batch_imgs = [pilify(img) for img in batch["image"]]
+            with torch.inference_mode():
+                feats = model(images=batch_imgs)
 
-        ids.extend([i + j for j in range(len(batch_imgs))])
-        labels.extend(
-            [int(ds[i + j].get("label", ds[i + j].get("label", 0))) for j in range(len(batch_imgs))]
-        )
+            ids = batch["id"] if "id" in batch else list(range(idx, idx + sz))
+            labels = batch["label"] if "label" in batch else [0] * sz
 
-    if embeddings:
-        x = np.concatenate(embeddings, axis=0)
+            # Iterate over the batch since the generator is only supposed to yield a single datum
+            for i in range(sz):
+                yield {"id": ids[i], "embedding": feats[i], "label": labels[i]}
 
-    else:
-        config = getattr(model, "config", None)
-        dim = 0
-        if config is not None:
-            if isinstance(config, dict):
-                dim = int(config.get("projection_dim") or config.get("hidden_size") or 0)
-            else:
-                dim = int(getattr(config, "projection_dim", 0) or getattr(config, "hidden_size", 0))
-        x = np.empty((0, max(dim, 0)), dtype=np.float32)
+            idx += sz
 
-    return ImageDatasetWithEmbeddings(x, ids, np.asarray(labels))
+    features = Features(
+        {
+            # `id` column to be of type int64
+            "id": Value("int64"),
+            # `embedding` column is of type datasets.List[float32]
+            "embedding": HFList(feature=Value("float32"), length=model.embedding_dim),
+            "label": Value("int32"),
+        }
+    )
+    ds_with_embeddings = Dataset.from_generator(
+        processor,
+        features=features,
+    )
+
+    # Update the datset info with the new features
+    ds_info = vars(ds.info)
+    ds_info.pop("features")  # remove the old features attribute
+    dataset_info = DatasetInfo(features=features, **ds_info)
+    # directly access attribute since no setter for `info`
+    ds_with_embeddings._info = dataset_info  # noqa: SLF001
+
+    return ds_with_embeddings
 
 
 def embed_text(queries: list[str], model_id: str, batch_size: int = 128) -> np.ndarray:
@@ -126,40 +132,3 @@ def embed_text(queries: list[str], model_id: str, batch_size: int = 128) -> np.n
             feats[i : i + batch_feats.shape[0]] = batch_feats
 
     return feats
-
-
-def to_huggingface_dataset(
-    dataset: ImageDatasetWithEmbeddings,
-) -> Dataset:
-    """Convert embeddings and metadata to a HuggingFace dataset."""
-    emb_dim = (
-        dataset.embeddings.shape[1]
-        if dataset.embeddings.ndim == _EMBED_MATRIX_NDIM and dataset.embeddings.shape[1:]
-        else 0
-    )
-
-    # Convert to np array
-    dataset.labels = np.asarray(dataset.labels)
-
-    try:
-        label_values = dataset.labels.astype(np.int32)
-        label_feature = Value("int32")
-    except (TypeError, ValueError):
-        label_values = dataset.labels.astype(str)
-        label_feature = Value("string")
-
-    feats = Features(
-        {
-            "id": Value("int64"),
-            "label": label_feature,
-            "embedding": HFSequence(Value("float32"), length=emb_dim if emb_dim else -1),
-        },
-    )
-    return Dataset.from_dict(
-        {
-            "id": dataset.ids,
-            "label": label_values,
-            "embedding": dataset.embeddings,
-        },
-        features=feats,
-    )

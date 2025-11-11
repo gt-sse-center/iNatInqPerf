@@ -245,7 +245,8 @@ class Benchmarker:
         add_n = self.cfg.update["add_count"]
         del_n = self.cfg.update["delete_count"]
 
-        x = np.asarray(dataset["embedding"], dtype=np.float32)
+        logger.info(f"Performing update with {add_n} additions and {del_n} deletions.")
+
         # Dataset columns may arrive as NumPy arrays; normalise to a plain list so max()
         # doesn't trip over array truthiness (avoids ValueError about ambiguous truth value).
         existing_raw = dataset["id"] if "id" in dataset.column_names else list(range(len(dataset)))
@@ -255,14 +256,21 @@ class Benchmarker:
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)
-        add_vecs = x[:add_n].copy()
+
+        # Get subset of vectors to add to vector db
+        add_vecs_subset = dataset["embedding"][:add_n]
+
+        # convert to numpy array
+        add_vecs = np.asarray(add_vecs_subset, dtype=np.float32).copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
         add_ids = list(range(next_id, next_id + add_n))
 
+        logger.info("Update-Add Profiling")
         with Profiler(f"update-add-{vdb_type}", containers=self.container_configs):
             data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]
             vectordb.upsert(data_points)
 
+        logger.info("Update-Delete Profiling")
         with Profiler(f"update-delete-{vdb_type}", containers=self.container_configs):
             del_ids = add_ids[:del_n]
             vectordb.delete(del_ids)

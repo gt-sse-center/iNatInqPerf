@@ -30,12 +30,17 @@ class Qdrant(VectorDatabase):
         collection_name: str = "default_collection",
         m: int = 32,
         ef: int = 128,
-        batch_size: int = 1000,
+        batch_size: int = 1024,
         **params,  # noqa: ARG002
     ) -> None:
         super().__init__(dataset, metric)
 
-        self.client = QdrantClient(url=url, port=port, prefer_grpc=True)
+        self.client = QdrantClient(
+            url=url,
+            port=port,
+            prefer_grpc=True,  # Use gRPC since it is faster
+            timeout=10,  # Extend the timeout to 10 seconds
+        )
         self.collection_name = collection_name
 
         self.m = m
@@ -82,6 +87,7 @@ class Qdrant(VectorDatabase):
                     ids=ids,
                     vectors=vectors,
                 ),
+                wait=False,  # async write for speed.
             )
 
         # Set the indexing params

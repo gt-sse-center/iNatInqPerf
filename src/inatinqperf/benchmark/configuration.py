@@ -66,7 +66,8 @@ class VectorDatabaseConfig(BaseModel):
 class FilterConfig(BaseModel):
     """Configuration for filters."""
 
-    acceptable_iconic_groups: list[NonEmptyStr]
+    min_id: int
+    max_id: int
 
 
 class SearchParams(BaseModel):

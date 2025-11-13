@@ -85,13 +85,6 @@ class Faiss(VectorDatabase):
                 batch_size=batch_size,
             )
 
-        self._store_metadata(dataset)
-
-    def _store_metadata(self, dataset: HuggingFaceDataset) -> None:
-        """Store the metadata in the index."""
-        limited_dataset = dataset.remove_columns(["embedding", "label"])
-        self.metadata_df = limited_dataset.to_pandas()
-
     @staticmethod
     def _translate_metric(metric: Metric) -> str:
         """Map the metric value to a string value which is used by the FAISS client."""
@@ -281,9 +274,7 @@ class Faiss(VectorDatabase):
         if q.filters is None:
             distances, labels = self.index.search(query_vector, topk)
         else:
-            valid_ids = self.metadata_df[
-                self.metadata_df["iconic_group"].isin(q.filters.acceptable_iconic_groups)
-            ]["id"].to_numpy(dtype=np.int64)
+            valid_ids = np.arange(q.filters.min_id, q.filters.max_id, dtype=np.int64)
             valid_id_selector = faiss.IDSelectorArray(valid_ids)
             search_params = faiss.SearchParametersIVF(sel=valid_id_selector)
             distances, labels = self.index.search(query_vector, topk, params=search_params)

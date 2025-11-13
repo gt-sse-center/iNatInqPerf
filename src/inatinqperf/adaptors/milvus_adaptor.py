@@ -84,11 +84,6 @@ class Milvus(VectorDatabase):
                 datatype=DataType.FLOAT_VECTOR,
                 dim=self.dim,
             )
-            .add_field(
-                field_name="iconic_group",
-                datatype=DataType.VARCHAR,
-                max_length=256,
-            )
         )
 
         # This calls `.add_index` internally
@@ -179,8 +174,9 @@ class Milvus(VectorDatabase):
 
     def _search_with_filters(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
         """Search for top-k nearest neighbors with filters."""
-        filter_string = "iconic_group IN {iconic_groups}"
-        filter_params = {"iconic_groups": q.filters.acceptable_iconic_groups}
+        # TODO: Implement filter search
+        filter_string = "id >= {min_id} AND id <= {max_id}"
+        filter_params = {"min_id": q.filters.min_id, "max_id": q.filters.max_id}
 
         return self.client.search(
             collection_name=self.collection_name,

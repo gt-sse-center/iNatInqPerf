@@ -147,8 +147,9 @@ class Benchmarker:
         filters = None
 
         if self.cfg.search.filters is not None:
-            acceptable_iconic_groups = self.cfg.search.filters.acceptable_iconic_groups
-            filters = Filter(acceptable_iconic_groups=acceptable_iconic_groups)
+            min_id = self.cfg.search.filters.min_id
+            max_id = self.cfg.search.filters.max_id
+            filters = Filter(min_id=min_id, max_id=max_id)
 
         dataset_dir = self.base_path / self.cfg.dataset.directory
         ds = Dataset.load_from_disk(dataset_dir)

@@ -163,12 +163,11 @@ class Weaviate(VectorDatabase):
                 near_vector=q.vector, limit=topk, return_metadata=MetadataQuery(distance=True, score=True)
             )
         else:
-            iconic_group_filter = Filter.by_property("iconic_group").contains_any(
-                q.filters.acceptable_iconic_groups
-            )
+            id_filter = (Filter.by_property("dataset_id").greater_than(q.filters.min_id)
+            & Filter.by_property("dataset_id").less_than(q.filters.max_id))
             response = collection.query.near_vector(
                 near_vector=q.vector,
-                filters=iconic_group_filter,
+                filters=id_filter,
                 limit=topk,
                 return_metadata=MetadataQuery(distance=True, score=True),
             )

@@ -123,12 +123,11 @@ class Benchmarker:
         vdb_type = self.cfg.vectordb.type
         logger.info(f"Building {vdb_type} vector database")
 
-        vectordb_cls = self._resolve_vectordb_class(vdb_type)
         init_params = self.cfg.vectordb.params.to_dict()
         metric: Metric = init_params.pop("metric")
 
         with Profiler(f"build-{vdb_type}", containers=self.container_configs):
-            vdb = vectordb_cls(dataset=dataset, metric=metric, **init_params)
+            vdb = VECTORDBS[vdb_type.lower()](dataset=dataset, metric=metric, **init_params)
 
             index = getattr(vdb, "index", None)
             index_size = getattr(index, "ntotal", None) if index is not None else None
@@ -145,11 +144,6 @@ class Benchmarker:
         # Emit a closing marker so benchmark logs clearly delimit setup time.
         logger.info(f"Exiting building {vdb_type} vector database")
         return vdb
-
-    @staticmethod
-    def _resolve_vectordb_class(vdb_type: str) -> type[VectorDatabase]:
-        """Return the adaptor class associated with `vdb_type`."""
-        return VECTORDBS[vdb_type.lower()]
 
     @staticmethod
     def _dataset_to_datapoints(dataset: Dataset) -> list[DataPoint]:

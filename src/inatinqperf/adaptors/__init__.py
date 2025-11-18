@@ -18,6 +18,7 @@ __all__ = [
     "VECTORDBS",
     "DataPoint",
     "Faiss",
+    "Metric",
     "Milvus",
     "Qdrant",
     "Query",

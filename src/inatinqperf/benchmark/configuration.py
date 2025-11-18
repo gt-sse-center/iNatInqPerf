@@ -95,7 +95,7 @@ class ContainerConfig(BaseModel):
     """Configuration for setting up a docker container of the vector database."""
 
     image: NonEmptyStr
-    name: NonEmptyStr
+    name: NonEmptyStr | None = "not-specified"
     hostname: str | None = None
     ports: dict[str | PositiveInt, PositiveInt]
     environment: dict[str, str] = {}

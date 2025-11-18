@@ -3,6 +3,7 @@
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import yaml
@@ -23,6 +24,9 @@ from inatinqperf.utils import (
     load_huggingface_dataset,
     to_huggingface_dataset,
 )
+
+if TYPE_CHECKING:
+    from inatinqperf.adaptors.enums import Metric
 
 
 class Benchmarker:
@@ -47,6 +51,7 @@ class Benchmarker:
             self.base_path = Path(__file__).resolve().parent.parent
         else:
             self.base_path = base_path
+        self.container_configs = list(self.cfg.containers)
 
     def download(self) -> None:
         """Download HF dataset and optionally export images."""
@@ -62,7 +67,10 @@ class Benchmarker:
         export_raw_images = self.cfg.dataset.export_images
         splits = self.cfg.dataset.splits
 
-        with Profiler(f"download-{dataset_id.split('/')[-1]}-{splits}"):
+        with Profiler(
+            f"download-{dataset_id.split('/')[-1]}-{splits}",
+            containers=self.container_configs,
+        ):
             ds = load_huggingface_dataset(dataset_id, splits)
             ds.save_to_disk(dataset_dir)
 
@@ -88,7 +96,7 @@ class Benchmarker:
         dataset_dir = self.base_path / self.cfg.dataset.directory
         logger.info(f"Generating embeddings with model={model_id} and saving to {dataset_dir}")
 
-        with Profiler("embed-images"):
+        with Profiler("embed-images", containers=self.container_configs):
             dse: ImageDatasetWithEmbeddings = embed_images(dataset_dir, model_id, batch_size)
 
         return self.save_as_huggingface_dataset(dse, embeddings_dir=embeddings_dir)
@@ -118,14 +126,45 @@ class Benchmarker:
         vdb_type = self.cfg.vectordb.type
         logger.info(f"Building {vdb_type} vector database")
 
+        vectordb_cls = self._resolve_vectordb_class(vdb_type)
         init_params = self.cfg.vectordb.params.to_dict()
+        metric: Metric = init_params.pop("metric")
 
-        with Profiler(f"build-{vdb_type}"):
-            vdb = VECTORDBS[vdb_type](dataset, **init_params)
+        with Profiler(f"build-{vdb_type}", containers=self.container_configs):
+            vdb = vectordb_cls(dataset=dataset, metric=metric, **init_params)
+
+            index = getattr(vdb, "index", None)
+            index_size = getattr(index, "ntotal", None) if index is not None else None
+            # The guard here is really just avoiding an unnecessary rewrite when the newly built
+            # vector DB already has its index populated; it does not exist because a repeat upsert
+            # would corrupt data, just to avoid work if nothing needs to be written.
+            if index_size == 0:
+                data_points = self._dataset_to_datapoints(dataset)
+                if data_points:
+                    vdb.upsert(data_points)
 
         logger.info(f"Stats: {vdb.stats()}")
 
         return vdb
+
+    @staticmethod
+    def _resolve_vectordb_class(vdb_type: str) -> type[VectorDatabase]:
+        """Return the adaptor class associated with `vdb_type`."""
+        return VECTORDBS[vdb_type.lower()]
+
+    @staticmethod
+    def _dataset_to_datapoints(dataset: Dataset) -> list[DataPoint]:
+        """Convert a HuggingFace dataset to a list of DataPoint objects."""
+
+        # TODO: add metadata info from dataset if available
+        return [
+            DataPoint(
+                id=int(row_id),
+                vector=vector,
+                metadata={},
+            )
+            for idx, (row_id, vector) in enumerate(zip(dataset["id"], dataset["embedding"], strict=True))
+        ]
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:
         """Build the FAISS vector database with a `IndexFlat` index as a baseline."""
@@ -157,7 +196,7 @@ class Benchmarker:
         logger.info("Embedded all queries")
 
         logger.info("Performing search on baseline")
-        with Profiler("search-baseline-FaissFlat") as p:
+        with Profiler("search-baseline-FaissFlat", containers=self.container_configs) as p:
             i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
             for i in tqdm(range(q.shape[0])):
                 base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
@@ -166,7 +205,7 @@ class Benchmarker:
 
         # search + profile
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
-        with Profiler(f"search-{self.cfg.vectordb.type}") as p:
+        with Profiler(f"search-{self.cfg.vectordb.type}", containers=self.container_configs) as p:
             latencies = []
             for i in tqdm(range(q.shape[0])):
                 t0 = time.perf_counter()
@@ -209,18 +248,24 @@ class Benchmarker:
         del_n = self.cfg.update["delete_count"]
 
         x = np.asarray(dataset["embedding"], dtype=np.float32)
+        # Dataset columns may arrive as NumPy arrays; normalise to a plain list so max()
+        # doesn't trip over array truthiness (avoids ValueError about ambiguous truth value).
+        existing_raw = dataset["id"] if "id" in dataset.column_names else list(range(len(dataset)))
+        existing_ids = existing_raw.tolist() if hasattr(existing_raw, "tolist") else list(existing_raw)
+        max_existing_id = max(existing_ids) if existing_ids else -1
+        next_id = max_existing_id + 1
 
         # craft new vectors by slight noise around existing (simulating fresh writes)
         rng = np.random.default_rng(42)
         add_vecs = x[:add_n].copy()
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
-        add_ids = list(range(add_n))
+        add_ids = [next_id + i for i in range(add_n)]
 
-        with Profiler(f"update-add-{vdb_type}"):
+        with Profiler(f"update-add-{vdb_type}", containers=self.container_configs):
             data_points = [DataPoint(id=i, vector=v, metadata={}) for i, v in zip(add_ids, add_vecs)]
             vectordb.upsert(data_points)
 
-        with Profiler(f"update-delete-{vdb_type}"):
+        with Profiler(f"update-delete-{vdb_type}", containers=self.container_configs):
             del_ids = add_ids[:del_n]
             vectordb.delete(del_ids)
 
@@ -234,6 +279,8 @@ class Benchmarker:
         # Compute embeddings
         dataset = self.embed()
 
+        vectordb: VectorDatabase | None = None
+
         with container_context(self.cfg):
             # Build baseline vector database
             baseline_vectordb = self.build_baseline(dataset)
@@ -246,9 +293,6 @@ class Benchmarker:
 
             # Update operations
             self.update(dataset, vectordb)
-
-            # Clean up the vectordb
-            del vectordb
 
 
 def ensure_dir(p: Path) -> Path:

@@ -6,8 +6,8 @@ import time
 import docker
 import numpy as np
 import pytest
-from datasets import Dataset
 import weaviate
+from datasets import Dataset
 from weaviate.collections.classes import config
 
 from inatinqperf.adaptors.base import DataPoint, Query
@@ -48,9 +48,10 @@ def container_fixture():
     # This avoids connection timeout issues in tests.
     time.sleep(3)
 
-    yield container
-
-    container.stop()
+    try:
+        yield container
+    finally:
+        container.stop()
 
 
 @pytest.fixture(name="collection_name")
@@ -158,7 +159,6 @@ def test_delete_multiple(dataset, N):
 
 def test_delete_invalid(dataset, N):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw")
-
     adaptor.delete([N + 100])
 
     collection = adaptor.client.collections.use(adaptor.collection_name)
@@ -168,7 +168,6 @@ def test_delete_invalid(dataset, N):
 
 def test_stats(dataset, N, collection_name, dim):
     adaptor = Weaviate(dataset, Metric.COSINE, "hnsw", collection_name=collection_name)
-
     stats = adaptor.stats()
 
     assert stats["ntotal"] == N
@@ -186,7 +185,6 @@ def test_full_lifecycle(collection_name, dataset, N, dim):
         url="http://localhost",
         collection_name=collection_name,
     )
-
     ids = np.arange(300, 304, dtype=np.int64)
     rng = np.random.default_rng(117)
     vectors = rng.random(size=(4, dim), dtype=np.float32)
@@ -225,7 +223,6 @@ def test_metric_mapping(collection_name, dataset, metric, expected_metric):
         collection_name=collection_name,
         index_type="hnsw",
     )
-
     collection = adaptor.client.collections.use(adaptor.collection_name)
     collection_config = collection.config.get()
     vector_index_config = collection_config.vector_config["default"].vector_index_config

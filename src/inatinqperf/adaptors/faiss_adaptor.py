@@ -1,6 +1,7 @@
 """FAISS vector database adaptor."""
 
 from collections.abc import Sequence
+from pathlib import Path
 
 import faiss
 import numpy as np
@@ -137,8 +138,7 @@ class Faiss(VectorDatabase):
         nprobe: int,
         batch_size: int,
     ) -> faiss.Index:
-        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
-        n = embeddings.shape[0]
+        n = len(dataset)
 
         # Since FAISS hardcodes the minimum number
         # of clustering points to 39, we make sure
@@ -161,11 +161,30 @@ class Faiss(VectorDatabase):
         base = faiss.index_factory(dim, desc, metric_type)
         index = faiss.IndexIDMap2(base)
 
+        # If the embeddings are not available as an npy file, then compute them via memory mapped IO
+        embeddings_path = Path(f"{dataset.info.dataset_name}_embeddings.npy")
+        if not embeddings_path.exists():
+            # Extract the entire embedding matrix using memory mapped IO.
+            embeddings = np.memmap(embeddings_path, dtype=np.float32, mode="w+", shape=(n, dim))
+            # Write directly to file
+            embeddings[0:n] = np.asarray(dataset["embedding"], dtype=np.float32, order="C")
+
+            # Flush changes to commit them to disk
+            embeddings.flush()
+
+        embeddings = np.memmap(embeddings_path, dtype=np.float32, mode="r+", shape=(n, dim))
+
+        if embeddings.size == 0:
+            msg = "No embeddings available to train the FAISS index."
+            raise ValueError(msg)
+
         # Train the index
         logger.info(f"Training IVFPQ with embeddings of shape {embeddings.shape} {embeddings.dtype}")
         index.train(embeddings)
         # Release the training matrix before streaming ingestion to reduce peak memory.
         del embeddings
+
+        # TODO(VarunA): Save the generated index so we don't need to recompute it again.
 
         logger.info(f"Adding {len(dataset)} vectors to Faiss IVFPQ index (batch_size={batch_size})")
         num_batches = int(np.ceil(len(dataset) / batch_size))

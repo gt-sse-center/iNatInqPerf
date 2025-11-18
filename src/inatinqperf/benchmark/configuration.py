@@ -63,6 +63,7 @@ class SearchParams(BaseModel):
 
     topk: int
     queries_file: Path
+    limit: int = -1
 
 
 class ContainerHealthCheck(BaseModel):

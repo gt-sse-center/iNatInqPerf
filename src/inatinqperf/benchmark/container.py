@@ -1,5 +1,6 @@
 """Functions to help with managing (docker) containers."""
 
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -67,6 +68,10 @@ def container_context(config: Config | dict) -> Generator[object]:
             containers.append(container)
 
             logger.info(f"Running container with image: {container_cfg.image}")
+
+        # Wait 5 seconds to let the containers start up
+        # Helps prevent connection errors
+        time.sleep(5)
 
         yield containers
 

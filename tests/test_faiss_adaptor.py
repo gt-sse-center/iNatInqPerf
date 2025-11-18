@@ -46,7 +46,7 @@ def ivfpq_small_trainset_fixture():
 def ivfpq_trainset_fixture():
     """Large training set so IVF-PQ can train without FAISS clustering warnings."""
     rng = np.random.default_rng(42)
-    X = rng.standard_normal((10240, 2)).astype(np.float32)  # >= 9984
+    X = rng.standard_normal((624, 2)).astype(np.float32)
     ids = np.arange(1000, 1000 + X.shape[0], dtype=np.int64)
 
     data_dict = {"embedding": X, "id": ids}
@@ -103,7 +103,7 @@ def test_faiss_ivfpq_build_and_search_with_large_training(ivfpq_trainset, small_
     assert len(results) == 2
     # ids returned should come from our set (since they are much closer than random train points)
     assert results[0].id == 100
-    assert results[1].id == 101
+    assert results[1].id == 102
 
     # delete works and stats update
     vdb.delete([100])

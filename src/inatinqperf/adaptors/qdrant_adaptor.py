@@ -87,7 +87,6 @@ class Qdrant(VectorDatabase):
                     ids=ids,
                     vectors=vectors,
                 ),
-                wait=False,  # async write for speed.
             )
 
         # Set the indexing params

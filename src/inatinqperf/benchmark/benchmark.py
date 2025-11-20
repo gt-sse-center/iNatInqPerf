@@ -261,7 +261,7 @@ class Benchmarker:
         add_vecs_subset = dataset["embedding"][:add_n]
 
         # convert to numpy array
-        add_vecs = np.asarray(add_vecs_subset, dtype=np.float32).copy()
+        add_vecs = np.asarray(add_vecs_subset, dtype=np.float32)
         add_vecs += rng.normal(0, 0.01, size=add_vecs.shape).astype(np.float32)
         add_ids = list(range(next_id, next_id + add_n))
 

@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import numpy as np
 from datasets import Dataset as HuggingFaceDataset
 
 from inatinqperf.adaptors.enums import Metric
@@ -63,7 +62,7 @@ class VectorDatabase(ABC):
         """
         # Will raise exception if `metric` is not valid.
         self.metric = Metric(metric)
-        self.dim = np.asarray(dataset["embedding"]).shape[1]
+        self.dim = len(dataset["embedding"][0])
 
     @staticmethod
     @abstractmethod

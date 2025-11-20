@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 
+import numpy as np
 from datasets import Dataset as HuggingFaceDataset
 from loguru import logger
 from pymilvus import (
@@ -99,13 +100,12 @@ class Milvus(VectorDatabase):
             index_params=milvus_index_params,
         )
 
-        for i in tqdm(range(0, len(dataset), batch_size)):
-            batch_data = []
-            end = min(i + batch_size, len(dataset))
-            for k in range(i, end):
-                rid = int(dataset[k]["id"])
-                vec = dataset[k]["embedding"]
-                batch_data.append({"id": rid, "vector": vec})
+        num_batches = int(np.ceil(len(dataset) / batch_size))
+        for batch in tqdm(dataset.iter(batch_size=batch_size), total=num_batches):
+            batch_data = [
+                {"id": batch["id"][i], "vector": batch["embedding"][i]}
+                for i in range(len(batch["embedding"]))
+            ]
             self.client.insert(collection_name=self.collection_name, data=batch_data)
 
         # loads the index files and fields raw data into memory for rapid response to searches and queries

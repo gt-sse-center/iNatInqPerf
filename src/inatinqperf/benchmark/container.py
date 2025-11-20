@@ -1,5 +1,6 @@
 """Functions to help with managing (docker) containers."""
 
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -50,6 +51,16 @@ def container_context(config: Config | dict) -> Generator[object]:
             if container_cfg is None:
                 continue
 
+            # If container is already running, then stop and remove it
+            # so we can start in a clean environment.
+            try:
+                existing_container = client.containers.get(container_cfg.name)
+                existing_container.stop()
+                existing_container.remove(v=True)
+
+            except docker.errors.NotFound:
+                pass
+
             container = client.containers.run(
                 image=container_cfg.image,
                 name=container_cfg.name,
@@ -68,9 +79,15 @@ def container_context(config: Config | dict) -> Generator[object]:
 
             logger.info(f"Running container with image: {container_cfg.image}")
 
+        # Wait 5 seconds to let the containers start up
+        # Helps prevent connection errors
+        time.sleep(5)
+
         yield containers
 
     finally:
+        logger.info("Cleaning up containers")
+
         try:
             # Stop containers in reverse order
             for container in containers[::-1]:

@@ -1,0 +1,30 @@
+dataset:
+  dataset_id: gt-csse/iNat24-vit-b-16
+  splits: "train"
+  directory: data/inquire_inat/emb
+  export_images: false
+
+embedding:
+  model_id: openai/clip-vit-base-patch16
+  batch_size: 64
+  directory: data/inquire_inat/emb
+
+vectordb:
+  type: faiss
+  params:
+    metric: ip
+    index_type: IVFPQ
+    nlist: 32768
+    m: 64
+    nbits: 8
+    nprobe: 32
+    ef: 32
+    batch_size: 1000
+
+search:
+  topk: 10
+  queries_file: benchmark/queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30

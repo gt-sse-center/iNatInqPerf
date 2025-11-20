@@ -7,7 +7,6 @@ Docs can be found here:
 
 from collections.abc import Sequence
 
-import numpy as np
 import weaviate
 from datasets import Dataset as HuggingFaceDataset
 from loguru import logger
@@ -107,14 +106,15 @@ class Weaviate(VectorDatabase):
     def _upload_dataset(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
         """Upload the HuggingFaceDataset to the vector database."""
 
-        embeddings = np.asarray(dataset["embedding"], dtype=np.float32)
-        if embeddings.size == 0:
+        # Avoid materialising embeddings up front; the client batching API will iterate the dataset.
+        num_vectors = len(dataset)
+        if num_vectors == 0:
             logger.warning("Dataset contains no embeddings; skipping ingest")
             return
 
-        ids = dataset["id"]
-        if len(ids) != len(embeddings):
-            msg = "Length of dataset ids must match number of embeddings"
+        # Validate dataset schema early so we fail before issuing network calls.
+        if "id" not in dataset.column_names or "embedding" not in dataset.column_names:
+            msg = "Dataset must contain both 'id' and 'embedding' columns for Weaviate upload."
             raise ValueError(msg)
 
         collection = self.client.collections.use(self.collection_name)

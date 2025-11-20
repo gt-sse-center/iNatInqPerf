@@ -14,7 +14,7 @@ def container_fixture():
     client = docker.from_env()
     container = client.containers.run(
         "qdrant/qdrant",
-        ports={"6333": "6333"},
+        ports={"6333": "6333", "6334": "6334"},
         remove=True,
         detach=True,  # enabled so we don't block on this
         healthcheck={

@@ -64,8 +64,11 @@ def create_dataset(
     if test_version:
         embeddings = np.load(file_paths[0])[:1000]
         dataset = Dataset.from_dict(
-            {"id": np.arange(1000).tolist(), "embedding": embeddings}, features=features, split=Split.TRAIN
+            {"id": list(range(1000)), "embedding": embeddings}, features=features, split=Split.TRAIN
         )
+
+        # Append _test to the dataset directory
+        dataset_dir += "_test"
 
     else:
         dataset = Dataset.from_generator(

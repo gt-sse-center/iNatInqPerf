@@ -122,7 +122,25 @@ class Faiss(VectorDatabase):
             metric_type=metric_type,
             batch_size=batch_size,
         )
-        index = dataset.get_index("embedding").faiss_index
+        dataset_index = dataset.get_index("embedding").faiss_index
+
+        # Convert to IndexIDMap2
+        # This is complicated since IndexIDMap2 requires an empty index as input
+        index = faiss.IndexIDMap2(faiss.IndexFlat(dim, metric_type))
+
+        # Get all vectors from the existing index in batches
+        idx = 0  # Running counter to help with flat index retrieval
+        for batch in dataset.iter(batch_size=batch_size):
+            ids = batch["id"]
+            # Get the corresponding indices of vectors for the flat index
+            idxs = np.arange(idx, idx + len(ids))
+            # Since this is a flat index, reconstruct_batch will return the exact vectors.
+            vectors = dataset_index.reconstruct_batch(idxs)
+            # Add vectors with IDs to the new IndexIDMap2
+            index.add_with_ids(vectors, np.asarray(ids, dtype=np.int64))
+
+            idxs += len(ids)
+
         logger.info(f"Built Faiss FLAT index with {len(dataset)} vectors")
 
         return index

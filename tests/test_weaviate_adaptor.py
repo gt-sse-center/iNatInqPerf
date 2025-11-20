@@ -4,6 +4,7 @@ import time
 
 
 import docker
+from docker.errors import APIError
 import numpy as np
 import pytest
 import weaviate
@@ -12,37 +13,40 @@ from weaviate.collections.classes import config
 
 from inatinqperf.adaptors.base import DataPoint, Query
 from inatinqperf.adaptors.enums import Metric
-from inatinqperf.adaptors.weaviate_adaptor import Weaviate
+from inatinqperf.adaptors.weaviate_adaptor import Weaviate, WeaviateCluster
 
 
 @pytest.fixture(scope="module", autouse=True)
 def container_fixture():
     """Ensure a Weaviate container is available for the duration of the tests."""
     client = docker.from_env()
-    container = client.containers.run(
-        "cr.weaviate.io/semitechnologies/weaviate:1.33.2",
-        ports={
-            "8080": "8080",
-            "50051": "50051",
-        },
-        # Minimal command to expose the HTTP interface on localhost:8080
-        command=["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"],
-        # Environment mirrors the configuration used during benchmark runs.
-        environment={
-            "QUERY_DEFAULTS_LIMIT": "25",
-            "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true",
-            "PERSISTENCE_DATA_PATH": "/var/lib/weaviate",
-            "AUTOSCHEMA_ENABLED": "false",  # Disable auto-schema,
-        },
-        remove=True,
-        detach=True,
-        healthcheck={
-            "test": ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"],
-            "interval": 30 * 10**9,
-            "timeout": 10 * 10**9,
-            "retries": 3,
-        },
-    )
+    try:
+        container = client.containers.run(
+            "cr.weaviate.io/semitechnologies/weaviate:1.33.2",
+            ports={
+                "8080": "8080",
+                "50051": "50051",
+            },
+            command=["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"],
+            environment={
+                "QUERY_DEFAULTS_LIMIT": "25",
+                "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true",
+                "PERSISTENCE_DATA_PATH": "/var/lib/weaviate",
+                "AUTOSCHEMA_ENABLED": "false",
+            },
+            remove=True,
+            detach=True,
+            healthcheck={
+                "test": ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"],
+                "interval": 30 * 10**9,
+                "timeout": 10 * 10**9,
+                "retries": 3,
+            },
+        )
+    except APIError as exc:
+        if "port is already allocated" in str(exc).lower():
+            pytest.skip(f"Weaviate test container could not bind port 8080: {exc}")
+        raise
 
     # Wait for 3 seconds since the Weaviate container is slow to load.
     # This avoids connection timeout issues in tests.
@@ -197,6 +201,60 @@ def test_full_lifecycle(collection_name, dataset, N, dim):
     stats = adaptor.stats()
     assert stats["ntotal"] == N + len(ids)
     assert stats["collection_name"] == collection_name
+
+
+def test_weaviate_cluster_configuration(monkeypatch, dataset):
+    created = {}
+
+    class FakeCollections:
+        def __init__(self):
+            self.created = None
+
+        def exists(self, collection_name):
+            return False
+
+        def delete(self, collection_name):
+            created["deleted"] = collection_name
+
+        def create(self, *args, **kwargs):
+            self.created = {"args": args, "kwargs": kwargs}
+            created["create"] = self.created
+
+    class FakeClient:
+        def __init__(self, *, connection_params, skip_init_checks):
+            self.connection_params = connection_params
+            self.collections = FakeCollections()
+
+        def connect(self):
+            created["connected"] = True
+
+    monkeypatch.setattr(
+        "inatinqperf.adaptors.weaviate_adaptor.weaviate.WeaviateClient",
+        FakeClient,
+    )
+    monkeypatch.setattr(
+        "inatinqperf.adaptors.weaviate_adaptor.Weaviate._upload_dataset",
+        lambda self, dataset, batch_size: None,
+    )
+
+    cluster = WeaviateCluster(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        index_type="hnsw",
+        url="http://primary",
+        port="9090",
+        collection_name="clustered",
+        node_urls=["http://a:8080", "http://b:8080"],
+        shard_count=4,
+        virtual_per_physical=2,
+        grpc_port=4321,
+    )
+
+    assert cluster.node_urls == ["http://a:8080", "http://b:8080"]
+    assert cluster.shard_count == 4
+    assert cluster.virtual_per_physical == 2
+    assert created["connected"] is True
+    assert cluster.client.connection_params.grpc_port == 4321
 
     query = Query(vector=rng.random(size=(dim,), dtype=np.float32).tolist())
     results = adaptor.search(query, topk=3)

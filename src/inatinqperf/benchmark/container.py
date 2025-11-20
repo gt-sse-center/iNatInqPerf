@@ -1,7 +1,6 @@
 """Functions to help with managing (docker) containers."""
 
 import time
-import time
 from collections.abc import Generator
 from contextlib import contextmanager
 

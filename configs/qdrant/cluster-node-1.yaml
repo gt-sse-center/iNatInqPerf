@@ -1,0 +1,14 @@
+cluster:
+  enabled: true
+  p2p:
+    host: qdrant-node-1
+    port: 6335
+  consensus:
+    self_id: node-1
+    peers:
+      - id: node-1
+        uri: http://qdrant-node-1:6335
+      - id: node-2
+        uri: http://qdrant-node-2:6335
+      - id: node-3
+        uri: http://qdrant-node-3:6335

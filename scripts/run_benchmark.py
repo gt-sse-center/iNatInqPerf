@@ -9,6 +9,7 @@ import typer
 from inatinqperf.benchmark.benchmark import Benchmarker
 
 app = typer.Typer()
+app = typer.Typer(pretty_exceptions_enable=False)
 
 
 @app.command("run")

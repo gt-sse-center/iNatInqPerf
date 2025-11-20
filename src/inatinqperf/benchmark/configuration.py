@@ -34,10 +34,9 @@ class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
     url: NonEmptyStr = "localhost"
-    # The vector db clients expect the port as a string
-    port: NonEmptyStr = "0"
+    port: NonEmptyStr  # The vector db clients expect the port as a string
+    grpc_port: NonEmptyStr | None = None
     collection_name: NonEmptyStr = "benchmark"
-
     metric: Metric
     index_type: NonEmptyStr
 
@@ -50,6 +49,11 @@ class VectorDatabaseParams(BaseModel):
     ########
 
     batch_size: int = 1000
+    node_urls: Sequence[NonEmptyStr] | None = None
+    shard_count: int | None = None
+    replication_factor: int | None = None
+    virtual_per_physical: int | None = None
+    container_names: Sequence[NonEmptyStr] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return parameters, including extra fields, omitting unset values."""

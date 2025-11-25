@@ -204,6 +204,31 @@ def test_update(data_path, config_yaml, benchmark_module):
     )
 
 
+def test_update_and_search_invokes_all(monkeypatch, config_yaml, data_path):
+    """Ensure the combined post-update search operation runs both updates and search."""
+    benchmarker = Benchmarker(config_yaml, data_path)
+
+    calls: dict[str, list] = {"update": [], "search": []}
+
+    def fake_update(dataset, db):
+        calls["update"].append(db)
+
+    def fake_search(dataset, vdb, baseline):
+        calls["search"].append((vdb, baseline))
+
+    monkeypatch.setattr(benchmarker, "update", fake_update)
+    monkeypatch.setattr(benchmarker, "search", fake_search)
+
+    dataset = object()
+    vectordb = object()
+    baseline = object()
+
+    benchmarker.update_and_search(dataset, vectordb, baseline)
+
+    assert calls["update"] == [vectordb, baseline]
+    assert calls["search"] == [(vectordb, baseline)]
+
+
 # ---------- Edge cases for helpers ----------
 def test_recall_at_k_edges():
     # No hits when there are no neighbors (1 row, 0 columns -> denominator = 1*k)

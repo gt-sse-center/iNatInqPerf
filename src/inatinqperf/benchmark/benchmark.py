@@ -271,6 +271,17 @@ class Benchmarker:
 
         logger.info(f"Update complete: {vectordb.stats()}")
 
+    def update_and_search(
+        self,
+        dataset: Dataset,
+        vectordb: VectorDatabase,
+        baseline_vectordb: VectorDatabase,
+    ) -> None:
+        """Run update workflow then search again to capture post-update performance."""
+        self.update(dataset, vectordb)
+        self.update(dataset, baseline_vectordb)
+        self.search(dataset, vectordb, baseline_vectordb)
+
     def run(self) -> None:
         """Run end-to-end benchmark with all steps."""
         # Download dataset
@@ -291,8 +302,8 @@ class Benchmarker:
             # Perform search
             self.search(dataset, vectordb, baseline_vectordb)
 
-            # Update operations
-            self.update(dataset, vectordb)
+            # Update operations followed by search to measure impact
+            self.update_and_search(dataset, vectordb, baseline_vectordb)
 
 
 def ensure_dir(p: Path) -> Path:

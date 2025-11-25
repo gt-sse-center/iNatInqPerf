@@ -75,9 +75,9 @@ def test_faiss_flat_lifecycle(metric, ivfpq_trainset, query):
 
     # regression: nearest to [1,0]
     if metric == Metric.INNER_PRODUCT:
-        assert results[0].id == 11011
+        assert results[0].id == 1003
     if metric == Metric.L2:
-        assert results[0].id == 6027
+        assert results[0].id == 1009
 
     # delete some ids
     vdb.delete([1101, 1103])

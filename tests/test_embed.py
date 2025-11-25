@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from datasets import Dataset as HFDataset
 from inatinqperf.utils import embed
 
 
@@ -49,58 +50,33 @@ def test_pilify_invalid_type():
 def test_embed_images_empty_dataset(monkeypatch):
     monkeypatch.setattr(embed, "load_from_disk", lambda _: [])
 
-    dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch_size=2)
-    X = dataset_with_embeddings.embeddings
-    ids = dataset_with_embeddings.ids
-    labels = dataset_with_embeddings.labels
-
-    assert X.shape[0] == 0
-    assert ids == []
-    assert labels.tolist() == []
+    with pytest.raises(ValueError):
+        embed.embed_images("anypath", "dummy-model", batch_size=2)
 
 
-def test_to_hf_dataset_structure():
-    X = np.ones((3, 4))
-    ids = [1, 2, 3]
-    labels = np.asarray(["a", "b", "c"])
-    dse = embed.ImageDatasetWithEmbeddings(X, ids, labels)
-
-    ds = embed.to_huggingface_dataset(dse)
-    assert set(ds.column_names) == {"id", "label", "embedding"}
-    assert isinstance(ds[0]["embedding"], list)
-    assert ds[0]["id"] == 1
-    assert ds[0]["label"] == "a"
-
-
-def test_embed_images_and_to_hf_dataset(monkeypatch, tmp_path):
+def test_embed_images_and_to_hf_dataset(monkeypatch):
     """Test embedding images and saving to HuggingFace dataset format."""
-
-    class FakeDataset(list):
-        """Fake dataset: two records with images + labels."""
-
-        def __getitem__(self, i):
-            return super().__getitem__(i)
 
     N = 4
     batch_size = 2
 
-    ds = FakeDataset([{"image": Image.new("RGB", (8, 8), color=(i, i, i)), "label": i} for i in range(N)])
-    monkeypatch.setattr(embed, "load_from_disk", lambda path: ds)
+    ds = HFDataset.from_list(
+        [{"id": i, "image": Image.new("RGB", (8, 8), color=(i, i, i)), "label": i} for i in range(N)]
+    )
+    monkeypatch.setattr(embed, "load_from_disk", lambda _: ds)
 
     dataset_with_embeddings = embed.embed_images("anypath", "dummy-model", batch_size=batch_size)
-    X = dataset_with_embeddings.embeddings
-    ids = dataset_with_embeddings.ids
-    labels = dataset_with_embeddings.labels
+    X = dataset_with_embeddings["embedding"]
+    ids = dataset_with_embeddings["id"]
+    labels = dataset_with_embeddings["label"]
 
-    assert X.shape[0] == N
+    assert len(X) == N
     assert all(isinstance(i, int) for i in ids)
-    assert labels.tolist() == [0, 1, 2, 3]
+    assert labels == [0, 1, 2, 3]
 
-    # Convert to HF dataset structure
-    hf_ds = embed.to_huggingface_dataset(dataset_with_embeddings)
-    assert set(hf_ds.column_names) == {"id", "label", "embedding"}
-    assert len(hf_ds) == 4
-    assert isinstance(hf_ds[0]["embedding"], list)
+    assert set(dataset_with_embeddings.column_names) == {"id", "label", "embedding"}
+    assert len(dataset_with_embeddings) == 4
+    assert isinstance(dataset_with_embeddings["embedding"][0], list)
 
 
 def test_embed_text():

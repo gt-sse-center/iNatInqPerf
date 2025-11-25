@@ -15,11 +15,11 @@ authors = [
 requires-python = ">= 3.10"
 dependencies = [
     "numpy>=2.0.0",
-    "pandas>=1.5,<2.3",
-    "tqdm>=4.66",
+    "pandas>=1.5",
+    "tqdm>=4.67.1",
     "pillow>=9.5",
     "psutil>=5.9",
-    "datasets>=2.14,<3.0",
+    "datasets>=4.4.0",
     "huggingface-hub>=0.23",
     "safetensors>=0.4",
     "transformers>=4.53.0",
@@ -36,6 +36,7 @@ dependencies = [
     "pymilvus>=2.6.3",
     "weaviate-client>=4.17.0",
     "simpleeval>=1.0.3",
+    "python-dotenv>=1.2.1",
 ]
 
 classifiers = [

@@ -1,11 +1,13 @@
 """Qdrant vector database adaptor."""
 
+import time
 from collections.abc import Generator, Sequence
-from itertools import islice
 
+import numpy as np
 from loguru import logger
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, PointStruct
+from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
@@ -33,7 +35,7 @@ class Qdrant(VectorDatabase):
     ) -> None:
         super().__init__(dataset, metric)
 
-        self.client = QdrantClient(url=url, port=port)
+        self.client = QdrantClient(url=url, port=port, prefer_grpc=True)
         self.collection_name = collection_name
 
         self.m = m
@@ -48,48 +50,56 @@ class Qdrant(VectorDatabase):
             f"Creating collection {collection_name}"
         )
 
-        qdrant_index_params = models.HnswConfigDiff(
-            m=m,
+        vectors_config = models.VectorParams(
+            size=self.dim,
+            distance=self._translate_metric(metric),
+            on_disk=True,  # save to disk immediately
+        )
+
+        index_params = models.HnswConfigDiff(
+            m=0,  # disable indexing until dataset upload is complete
             ef_construct=ef,
             max_indexing_threads=0,
-            on_disk=False,
+            on_disk=True,  # Store index on disk
         )
 
         self.client.create_collection(
             collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=self.dim,
-                distance=self._translate_metric(metric),
-                hnsw_config=qdrant_index_params,
-            ),
-            shard_number=2,  # reasonable default as per qdrant docs
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
+            shard_number=4,  # reasonable default as per qdrant docs
         )
 
         # Batch insert dataset
-        for batch in self._batched(dataset, batch_size):
-            ids = [point.pop("id") for point in batch]
-            vectors = [point.pop("embedding") for point in batch]
+        num_batches = int(np.ceil(len(dataset) / batch_size))
+        for batch in tqdm(dataset.iter(batch_size=batch_size), total=num_batches):
+            ids = batch["id"]
+            vectors = batch["embedding"]
 
             self.client.upsert(
                 collection_name=collection_name,
                 points=models.Batch(
                     ids=ids,
                     vectors=vectors,
-                    payloads=batch,
                 ),
             )
 
+        # Set the indexing params
+        self.client.update_collection(
+            collection_name=collection_name,
+            hnsw_config=models.HnswConfigDiff(m=m),
+        )
+
+        # Log the number of point uploaded
         num_points_in_db = self.client.count(
             collection_name=collection_name,
             exact=True,
         ).count
         logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
 
-    @staticmethod
-    def _batched(iterable: HuggingFaceDataset, n: int) -> Generator[object]:
-        iterator = iter(iterable)
-        while batch := list(islice(iterator, n)):
-            yield batch
+        logger.info("Waiting for indexing to complete")
+        self.wait_for_index_ready(collection_name)
+        logger.info("Indexing complete!")
 
     @staticmethod
     def _translate_metric(metric: Metric) -> Distance:
@@ -105,6 +115,21 @@ class Qdrant(VectorDatabase):
 
         msg = f"{metric} metric specified is not a valid one for Qdrant."
         raise ValueError(msg)
+
+    def wait_for_index_ready(self, collection_name: str, poll_interval: float = 5.0) -> None:
+        """Wait until Qdrant reports the collection is fully indexed and ready."""
+        while True:
+            info = self.client.get_collection(collection_name)
+
+            status = info.status
+            optimizer_status = info.optimizer_status
+
+            if status == "green" and optimizer_status == "ok":
+                logger.info(f"✅ Index for '{collection_name}' is ready!")
+                break
+
+            logger.info(f"⏳ Waiting... status={status}, optimizer_status={optimizer_status}")
+            time.sleep(poll_interval)
 
     @staticmethod
     def _points_iterator(data_points: Sequence[DataPoint]) -> Generator[PointStruct]:

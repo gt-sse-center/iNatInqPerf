@@ -34,16 +34,21 @@ class VectorDatabaseParams(BaseModel):
     """Configuration for parameters initializing a Vector Database."""
 
     url: NonEmptyStr = "localhost"
-    port: NonEmptyStr  # The vector db clients expect the port as a string
+    # The vector db clients expect the port as a string
+    port: NonEmptyStr = "0"
     collection_name: NonEmptyStr = "benchmark"
 
     metric: Metric
     index_type: NonEmptyStr
-    nlist: int | None = None
-    m: int | None = None
-    nbits: int | None = None
-    nprobe: int | None = None
+
+    #### These are FAISS recommended default values for the IVFPQ index. ####
+    nlist: int = 32768
+    m: int = 64
+    nbits: int = 8
+    nprobe: int = 32
     ef: int = 32
+    ########
+
     batch_size: int = 1000
 
     def to_dict(self) -> dict[str, Any]:

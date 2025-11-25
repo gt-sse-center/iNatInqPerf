@@ -1,13 +1,13 @@
 dataset:
-  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
-  splits: "validation+test"
-  directory: data/inquire_benchmark/raw
-  export_images: true
+  dataset_id: gt-csse/iNat24-vit-b-16
+  splits: "train"
+  directory: data/inquire_inat/emb
+  export_images: false
 
 embedding:
-  model_id: openai/clip-vit-base-patch32
+  model_id: openai/clip-vit-base-patch16
   batch_size: 64
-  directory: data/inquire_benchmark/emb
+  directory: data/inquire_inat/emb
 
 containers:
   - image: "qdrant/qdrant:latest"
@@ -15,6 +15,7 @@ containers:
     hostname: "localhost"
     ports:
       6333: 6333
+      6334: 6334
     healthcheck:
       test: "curl -s http://localhost:6333/healthz | grep -q 'healthz check passed' || exit 1"
       interval: 3 * 10**9
@@ -31,7 +32,7 @@ vectordb:
     metric: cosine
     m: 64
     ef: 32
-    batch_size: 1000
+    batch_size: 2048
 
 search:
   topk: 10

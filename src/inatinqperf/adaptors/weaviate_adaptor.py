@@ -47,8 +47,11 @@ class Weaviate(VectorDatabase):
 
         self.collection_name = collection_name
 
+        grpc_port = 50051
+        connection_params = ConnectionParams.from_url(url=f"{url}:{port}", grpc_port=grpc_port)
+        object.__setattr__(connection_params, "grpc_port", grpc_port)
         self.client = weaviate.WeaviateClient(
-            connection_params=ConnectionParams.from_url(url=f"{url}:{port}", grpc_port=50051),
+            connection_params=connection_params,
             skip_init_checks=False,
         )
         self.client.connect()
@@ -193,7 +196,9 @@ class Weaviate(VectorDatabase):
     def close(self) -> None:
         """Close database connection."""
         if hasattr(self, "client") and self.client:
-            self.client.close()
+            client_close = getattr(self.client, "close", None)
+            if callable(client_close):
+                client_close()
 
 
 class WeaviateCluster(Weaviate):
@@ -230,8 +235,10 @@ class WeaviateCluster(Weaviate):
         self.virtual_per_physical = virtual_per_physical
 
         grpc = int(grpc_port) if grpc_port is not None else 50051
+        connection_params = ConnectionParams.from_url(url=self.node_urls[0], grpc_port=grpc)
+        object.__setattr__(connection_params, "grpc_port", grpc)
         self.client = weaviate.WeaviateClient(
-            connection_params=ConnectionParams.from_url(url=self.node_urls[0], grpc_port=grpc),
+            connection_params=connection_params,
             skip_init_checks=False,
         )
         self.client.connect()

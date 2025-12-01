@@ -227,7 +227,9 @@ class Qdrant(VectorDatabase):
     def close(self) -> None:
         """Close database connection."""
         if hasattr(self, "client") and self.client:
-            self.client.close()
+            client_close = getattr(self.client, "close", None)
+            if callable(client_close):
+                client_close()
 
 
 class QdrantCluster(Qdrant):
@@ -393,3 +395,19 @@ class QdrantCluster(Qdrant):
             }
         )
         return stats
+
+    @staticmethod
+    def _batched(
+        dataset: HuggingFaceDataset,
+        batch_size: int,
+    ) -> Generator[list[dict[str, object]], None, None]:
+        """Yield dataset rows in batches, keeping payload fields for upsert."""
+        batch: list[dict[str, object]] = []
+        for row in dataset:
+            batch.append(dict(row))
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch

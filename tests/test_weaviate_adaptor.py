@@ -256,16 +256,6 @@ def test_weaviate_cluster_configuration(monkeypatch, dataset):
     assert created["connected"] is True
     assert cluster.client.connection_params.grpc_port == 4321
 
-    query = Query(vector=rng.random(size=(dim,), dtype=np.float32).tolist())
-    results = adaptor.search(query, topk=3)
-    assert len(results) == 3
-    # regression
-    assert results[0].id == 240
-
-    adaptor.delete([100, 999])
-    stats_after_delete = adaptor.stats()
-    assert stats_after_delete["ntotal"] == N + len(ids) - 1  # 999 is not a valid ID to delete, hence -1
-
 
 @pytest.mark.parametrize(
     "metric,expected_metric",

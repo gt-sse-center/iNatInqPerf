@@ -36,7 +36,10 @@ vectordb:
 search:
   topk: 10
   queries_file: benchmark/queries.txt
-  
+  filters:
+    min_id: 0
+    max_id: 10000
+
 
 update:
   add_count: 50

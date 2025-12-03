@@ -1,13 +1,13 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
   splits: "validation[0:256]"
-  directory: data/inquire_benchmark/raw
-  export_images: true
+  directory: data/inquire_test/raw
+  export_images: false
 
 embedding:
   model_id: openai/clip-vit-base-patch32
   batch_size: 64
-  directory: data/inquire_benchmark/emb
+  directory: data/inquire_test/emb
 
 containers:
   - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
@@ -32,7 +32,7 @@ containers:
 vectordb:
   type: weaviate.hnsw
   params:
-    url: localhost
+    url: http://localhost # needs the http[s]
     port: "8080"
     index_type: hnsw
     collection_name: benchmark
@@ -42,6 +42,7 @@ vectordb:
 search:
   topk: 10
   queries_file: benchmark/queries.txt
+  limit: 100
 
 update:
   add_count: 50

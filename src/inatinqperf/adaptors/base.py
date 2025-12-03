@@ -10,6 +10,12 @@ from datasets import Dataset as HuggingFaceDataset
 from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.filter import Filter
 
+@dataclass
+class Filter:
+    """A class encapsulating the filter for a query."""
+
+    min_id: int
+    max_id: int
 
 @dataclass
 class DataPoint:
@@ -25,7 +31,7 @@ class Query:
     """A class encapsulating the query vector and optional filters."""
 
     vector: Sequence[float]
-    filters: Optional[Filter] = None
+    filters: Filter | None = None
 
 
 @dataclass

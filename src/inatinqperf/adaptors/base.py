@@ -3,12 +3,12 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional
 
 from datasets import Dataset as HuggingFaceDataset
 
 from inatinqperf.adaptors.enums import Metric
 from inatinqperf.adaptors.filter import Filter
+
 
 @dataclass
 class Filter:
@@ -16,6 +16,7 @@ class Filter:
 
     min_id: int
     max_id: int
+
 
 @dataclass
 class DataPoint:

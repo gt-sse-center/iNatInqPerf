@@ -6,10 +6,8 @@ from collections.abc import Generator, Sequence
 import numpy as np
 from loguru import logger
 from qdrant_client import QdrantClient, models
-from qdrant_client.models import Distance, PointStruct
+from qdrant_client.models import Distance, FieldCondition, Filter, PointStruct, Range
 from tqdm import tqdm
-from qdrant_client.models import Distance, PointStruct, Filter, FieldCondition, MatchAny
-from qdrant_client.models import Distance, PointStruct, Filter, FieldCondition, MatchAny, Range
 
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
@@ -172,9 +170,7 @@ class Qdrant(VectorDatabase):
                 search_params=models.SearchParams(hnsw_ef=ef, exact=False),
             )
         else:
-            id_filter = FieldCondition(
-                key="id", range=Range(gte=q.filters.min_id, lte=q.filters.max_id)
-            )
+            id_filter = FieldCondition(key="id", range=Range(gte=q.filters.min_id, lte=q.filters.max_id))
             final_filter = Filter(must=[id_filter])
             search_result = self.client.query_points(
                 collection_name=self.collection_name,

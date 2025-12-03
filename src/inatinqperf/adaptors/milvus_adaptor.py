@@ -15,7 +15,6 @@ from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import IndexTypeBase, Metric
-from inatinqperf.adaptors.filter import Filter
 
 
 class MilvusIndexType(IndexTypeBase):
@@ -136,7 +135,7 @@ class Milvus(VectorDatabase):
         """Delete vectors with given IDs."""
         self.client.delete(collection_name=self.collection_name, ids=ids)
 
-    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:  # NOQA: ARG002
+    def search(self, q: Query, topk: int, **kwargs) -> Sequence[SearchResult]:
         """Search for top-k nearest neighbors.
 
         The score returned in this case is the distance, so smaller is better.

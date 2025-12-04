@@ -79,9 +79,8 @@ def container_context(config: Config | dict) -> Generator[object]:
 
             logger.info(f"Running container with image: {container_cfg.image}")
 
-        # Wait 5 seconds to let the containers start up
-        # Helps prevent connection errors
-        time.sleep(5)
+            # Allow clustered services to stabilize before launching the next container.
+            time.sleep(5)
 
         yield containers
 

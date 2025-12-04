@@ -1,0 +1,126 @@
+dataset:
+  dataset_id: sagecontinuum/INQUIRE-Benchmark-small
+  splits: "validation+test"
+  directory: data/inquire_benchmark/raw
+  export_images: true
+
+embedding:
+  model_id: openai/clip-vit-base-patch32
+  batch_size: 64
+  directory: data/inquire_benchmark/emb
+
+container_network: weaviate-cluster
+
+containers:
+  - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
+    name: "weaviate-node-1"
+    hostname: "weaviate-node-1"
+    network: "weaviate-cluster"
+    ports:
+      8080: 8080
+      50051: 50051
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      AUTOSCHEMA_ENABLED: "false"
+      LOG_LEVEL: "info"
+      CLUSTER_HOSTNAME: "weaviate-node-1"
+      CLUSTER_GOSSIP_BIND_PORT: "7100"
+      CLUSTER_DATA_BIND_PORT: "7101"
+      RAFT_PORT: "8300"
+      RAFT_INTERNAL_RPC_PORT: "8301"
+      RAFT_JOIN: "weaviate-node-1,weaviate-node-2,weaviate-node-3"
+      RAFT_BOOTSTRAP_EXPECT: "3"
+      ASYNC_INDEXING: "false"
+    volumes: ["weaviate_node1_data:/var/lib/weaviate"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
+      retries: 3
+
+  - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
+    name: "weaviate-node-2"
+    hostname: "weaviate-node-2"
+    network: "weaviate-cluster"
+    ports:
+      8080: 8081
+      50051: 50052
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      AUTOSCHEMA_ENABLED: "false"
+      LOG_LEVEL: "info"
+      CLUSTER_HOSTNAME: "weaviate-node-2"
+      CLUSTER_GOSSIP_BIND_PORT: "7102"
+      CLUSTER_DATA_BIND_PORT: "7103"
+      CLUSTER_JOIN: "weaviate-node-1:7100"
+      RAFT_PORT: "8300"
+      RAFT_INTERNAL_RPC_PORT: "8301"
+      RAFT_JOIN: "weaviate-node-1,weaviate-node-2,weaviate-node-3"
+      RAFT_BOOTSTRAP_EXPECT: "3"
+      ASYNC_INDEXING: "false"
+    volumes: ["weaviate_node2_data:/var/lib/weaviate"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
+      retries: 3
+
+  - image: "cr.weaviate.io/semitechnologies/weaviate:1.33.2"
+    name: "weaviate-node-3"
+    hostname: "weaviate-node-3"
+    network: "weaviate-cluster"
+    ports:
+      8080: 8082
+      50051: 50053
+    environment:
+      QUERY_DEFAULTS_LIMIT: "25"
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      AUTOSCHEMA_ENABLED: "false"
+      LOG_LEVEL: "info"
+      CLUSTER_HOSTNAME: "weaviate-node-3"
+      CLUSTER_GOSSIP_BIND_PORT: "7104"
+      CLUSTER_DATA_BIND_PORT: "7105"
+      CLUSTER_JOIN: "weaviate-node-1:7100"
+      RAFT_PORT: "8300"
+      RAFT_INTERNAL_RPC_PORT: "8301"
+      RAFT_JOIN: "weaviate-node-1,weaviate-node-2,weaviate-node-3"
+      RAFT_BOOTSTRAP_EXPECT: "3"
+      ASYNC_INDEXING: "false"
+    volumes: ["weaviate_node3_data:/var/lib/weaviate"]
+    command: ["--host", "0.0.0.0", "--port", "8080", "--scheme", "http"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 3 * 10**9
+      timeout: 2 * 10**9
+      retries: 3
+
+vectordb:
+  type: weaviate.cluster
+  params:
+    index_type: hnsw
+    metric: cosine
+    url: http://localhost
+    port: "8080"
+    grpc_port: "50051"
+    collection_name: Benchmark
+    timeout: 10.0
+    node_urls:
+      - http://localhost:8080
+      - http://localhost:8081
+      - http://localhost:8082
+    shard_count: 3
+
+search:
+  topk: 10
+  queries_file: benchmark/queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30

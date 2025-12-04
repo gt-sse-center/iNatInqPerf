@@ -47,7 +47,17 @@ uv sync
 
 # Run an end-to-end benchmark (FAISS IVF+PQ vectordb) on the INQUIRE dataset.
 uv run python scripts/run_benchmark.py configs/inquire_benchmark.yaml
+
+# Spin up a 3-node Weaviate cluster (shared Docker network + RAFT) and run the benchmark.
+uv run python scripts/run_benchmark.py configs/inquire_benchmark_weaviate_cluster.yaml
+
+# Spin up a 3-node Qdrant cluster (HTTP+gRPC+p2p) and run the benchmark.
+uv run python scripts/run_benchmark.py configs/inquire_benchmark_qdrant_cluster.yaml
 ```
+
+### Distributed VectorDB Deployments
+
+- **Benchmark-managed clusters.** The `configs/inquire_benchmark_weaviate_cluster.yaml` and `configs/inquire_benchmark_qdrant_cluster.yaml` files include the container descriptions that `container_context` will launch automatically before each run. Make sure no identically named containers are already running, otherwise Docker will raise a name-conflict error.
 
 The benchmarking code will
 

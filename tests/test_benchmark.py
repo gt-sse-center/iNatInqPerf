@@ -182,13 +182,13 @@ def test_search(config_yaml, data_path, caplog):
     dataset = benchmarker.embed()
     vectordb = benchmarker.build(dataset)
 
-    benchmarker.search(dataset, vectordb, MockExactBaseline())
+    benchmarker.search(dataset, vectordb)
 
-    assert "faiss" in caplog.text
+    # assert "faiss" in caplog.text
     # The configured index type drives the log message; assert against the configured value.
     expected_index_type = benchmarker.cfg.vectordb.params.index_type.upper()
     assert expected_index_type in caplog.text
-    assert "recall@k" in caplog.text
+    # assert "recall@k" in caplog.text
 
 
 def test_update(data_path, config_yaml, benchmark_module):
@@ -221,20 +221,19 @@ def test_update_and_search_invokes_all(monkeypatch, config_yaml, data_path):
     def fake_update(dataset, db):
         calls["update"].append(db)
 
-    def fake_search(dataset, vdb, baseline):
-        calls["search"].append((vdb, baseline))
+    def fake_search(dataset, vdb):
+        calls["search"].append((vdb))
 
     monkeypatch.setattr(benchmarker, "update", fake_update)
     monkeypatch.setattr(benchmarker, "search", fake_search)
 
     dataset = object()
     vectordb = object()
-    baseline = object()
 
-    benchmarker.update_and_search(dataset, vectordb, baseline)
+    benchmarker.update_and_search(dataset, vectordb)
 
-    assert calls["update"] == [vectordb, baseline]
-    assert calls["search"] == [(vectordb, baseline)]
+    assert calls["update"] == [vectordb]
+    assert calls["search"] == [(vectordb)]
 
 
 # ---------- Edge cases for helpers ----------

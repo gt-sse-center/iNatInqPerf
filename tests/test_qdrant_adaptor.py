@@ -165,6 +165,17 @@ def test_qdrant_cluster_uses_cluster_config(monkeypatch, dataset):
             self.created_collection = kwargs
             recorded["create_args"] = kwargs
 
+        def get_collection(self, collection_name: str):
+            class Info:
+                """Mock info class."""
+
+                def __init__(self, status, optimizer_status):
+                    self.status = status
+                    self.optimizer_status = optimizer_status
+
+            info = Info("green", "ok")
+            return info
+
         def upsert(self, **kwargs):  # noqa: D401,ARG002
             """Record upsert operations for inspection."""
             recorded.setdefault("upserts", []).append(kwargs)
@@ -189,7 +200,7 @@ def test_qdrant_cluster_uses_cluster_config(monkeypatch, dataset):
         shard_number=5,
         replication_factor=2,
         write_consistency_factor=3,
-        grpc_port="9876",
+        grpc_port=9876,
         prefer_grpc=True,
         batch_size=1,
         startup_timeout=12.5,

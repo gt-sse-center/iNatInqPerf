@@ -42,7 +42,8 @@ class Milvus(VectorDatabase):
         index_type: MilvusIndexType,
         index_params: dict | None = None,
         url: str = "localhost",
-        port: str = "19530",
+        port: int = 19530,
+        grpc_port: int = 19530,
         collection_name: str = "default_collection",
         batch_size: int = 1000,
         **params,  # noqa: ARG002
@@ -54,7 +55,7 @@ class Milvus(VectorDatabase):
         self.collection_name = collection_name
 
         try:
-            connections.connect(host=url, port=port)
+            connections.connect(host=url, port=port, grpc_port=grpc_port)
             server_type = utility.get_server_type()
             logger.info(f"Milvus server is running. Server type: {server_type}")
         except Exception:

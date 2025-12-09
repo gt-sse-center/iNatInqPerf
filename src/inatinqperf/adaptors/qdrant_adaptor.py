@@ -1,12 +1,11 @@
 """Qdrant vector database adaptor."""
 
-import subprocess
 import time
 from collections.abc import Generator, Sequence
-from itertools import islice
 from shutil import which
 from urllib.parse import urlparse
 
+import numpy as np
 import requests
 from loguru import logger
 from qdrant_client import QdrantClient, models
@@ -15,38 +14,7 @@ from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
-
-HTTP_STATUS_OK = 200
-DEFAULT_GRPC_PORT = 6334
-_ALLOWED_CONTAINER_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
-
-
-def _is_safe_container_name(name: str) -> bool:
-    return bool(name) and all(char in _ALLOWED_CONTAINER_CHARS for char in name)
-
-
-def _log_single_container_tail(docker_cmd: str, container_name: str) -> None:
-    if not _is_safe_container_name(container_name):
-        logger.warning(f"Skipping unsafe container name: {container_name!r}")
-        return
-
-    try:
-        result = subprocess.run(  # noqa: S603
-            [docker_cmd, "logs", "--tail", "20", container_name],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        logger.warning(f"Failed to fetch logs for container '{container_name}': {exc}")
-        return
-
-    output = result.stdout.strip()
-    if output:
-        logger.warning(f"[{container_name}] {output}")
-    error_output = result.stderr.strip()
-    if error_output:
-        logger.warning(f"[{container_name}][stderr] {error_output}")
+from inatinqperf.container import log_single_container_tail
 
 
 class Qdrant(VectorDatabase):
@@ -61,8 +29,11 @@ class Qdrant(VectorDatabase):
         self,
         dataset: HuggingFaceDataset,
         metric: Metric,
+        *,
         url: str = "localhost",
-        port: str = "6333",
+        port: int = 6333,
+        grpc_port: int = 6334,
+        prefer_grpc: bool = True,
         collection_name: str = "default_collection",
         m: int = 32,
         ef: int = 128,
@@ -74,7 +45,8 @@ class Qdrant(VectorDatabase):
         self.client = QdrantClient(
             url=url,
             port=port,
-            prefer_grpc=True,  # Use gRPC since it is faster
+            grpc_port=grpc_port,
+            prefer_grpc=prefer_grpc,  # Use gRPC since it is faster
             timeout=10,  # Extend the timeout to 10 seconds
         )
         self.collection_name = collection_name
@@ -83,34 +55,27 @@ class Qdrant(VectorDatabase):
         # The ef value used during collection construction
         self.ef = ef
 
-        if self.client.collection_exists(collection_name=collection_name):
-            logger.info("Deleted existing collection")
-            self.client.delete_collection(collection_name=collection_name)
+        self._initialize_collection(dataset, batch_size)
 
-        logger.patch(lambda r: r.update(function="constructor")).info(
-            f"Creating collection {collection_name}"
-        )
-
-        vectors_config = models.VectorParams(
+    def _get_vectors_config(self) -> models.VectorParams:
+        """Get the Qdrant VectorParams config."""
+        return models.VectorParams(
             size=self.dim,
-            distance=self._translate_metric(metric),
+            distance=self._translate_metric(self.metric),
             on_disk=True,  # save to disk immediately
         )
 
-        index_params = models.HnswConfigDiff(
-            m=0,  # disable indexing until dataset upload is complete
-            ef_construct=ef,
+    def _get_index_params(self, m: int) -> models.HnswConfigDiff:
+        """Get the Qdrant indexing config."""
+        return models.HnswConfigDiff(
+            m=m,
+            ef_construct=self.ef,
             max_indexing_threads=0,
             on_disk=True,  # Store index on disk
         )
 
-        self.client.create_collection(
-            collection_name=collection_name,
-            vectors_config=vectors_config,
-            hnsw_config=index_params,
-            shard_number=4,  # reasonable default as per qdrant docs
-        )
-
+    def _upload_dataset_in_batches(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
+        """Upload `dataset` in batches of size `batch_size`."""
         # Batch insert dataset
         num_batches = int(np.ceil(len(dataset) / batch_size))
         for batch in tqdm(dataset.iter(batch_size=batch_size), total=num_batches):
@@ -118,28 +83,51 @@ class Qdrant(VectorDatabase):
             vectors = batch["embedding"]
 
             self.client.upsert(
-                collection_name=collection_name,
+                collection_name=self.collection_name,
                 points=models.Batch(
                     ids=ids,
                     vectors=vectors,
                 ),
             )
 
+    def _initialize_collection(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
+        """Helper method to initialize collection."""
+        if self.client.collection_exists(collection_name=self.collection_name):
+            logger.info("Deleted existing collection")
+            self.client.delete_collection(collection_name=self.collection_name)
+
+        logger.patch(lambda r: r.update(function="constructor")).info(
+            f"Creating collection {self.collection_name}"
+        )
+
+        vectors_config = self._get_vectors_config()
+        # disable indexing by setting m=0 until dataset upload is complete
+        index_params = self._get_index_params(m=0)
+
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
+            shard_number=4,  # reasonable default as per qdrant docs
+        )
+
+        self._upload_dataset_in_batches(dataset, batch_size)
+
         # Set the indexing params
         self.client.update_collection(
-            collection_name=collection_name,
-            hnsw_config=models.HnswConfigDiff(m=m),
+            collection_name=self.collection_name,
+            hnsw_config=models.HnswConfigDiff(m=self.m),
         )
 
         # Log the number of point uploaded
         num_points_in_db = self.client.count(
-            collection_name=collection_name,
+            collection_name=self.collection_name,
             exact=True,
         ).count
         logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
 
         logger.info("Waiting for indexing to complete")
-        self.wait_for_index_ready(collection_name)
+        self.wait_for_index_ready(self.collection_name)
         logger.info("Indexing complete!")
 
     @staticmethod
@@ -239,84 +227,80 @@ class QdrantCluster(Qdrant):
         self,
         dataset: HuggingFaceDataset,
         metric: Metric,
+        *,
         url: str = "localhost",
-        port: str = "6333",
-        node_urls: Sequence[str] | None = None,
-        container_names: Sequence[str] | None = None,
+        port: int = 6333,
+        grpc_port: int = 6334,
+        prefer_grpc: bool = False,
         collection_name: str = "default_collection",
         m: int = 32,
         ef: int = 128,
+        batch_size: int = 1000,
+        node_urls: Sequence[str] | None = None,
+        container_names: Sequence[str] | None = None,
         shard_number: int = 3,
         replication_factor: int = 1,
         write_consistency_factor: int | None = None,
-        grpc_port: str | None = None,
-        *,
-        prefer_grpc: bool = False,
-        batch_size: int = 1000,
         startup_timeout: float = 60.0,
-        **params,  # noqa: ARG002
+        **params,
     ) -> None:
-        VectorDatabase.__init__(self, dataset, metric)
-
-        self.collection_name = collection_name
         self.node_urls = self._resolve_node_urls(node_urls, url, port)
         self.container_names = list(container_names) if container_names else None
-        self.m = m
-        self.ef = ef
         self.shard_number = shard_number
         self.replication_factor = replication_factor
         self.write_consistency_factor = write_consistency_factor
 
         primary = self.node_urls[0]
         self._wait_for_startup(primary, timeout=startup_timeout, container_names=self.container_names)
-        grpc = int(grpc_port) if grpc_port is not None else 6334
-        self.client = QdrantClient(url=primary, grpc_port=grpc, prefer_grpc=prefer_grpc)
 
-        if self.client.collection_exists(collection_name=collection_name):
+        super().__init__(
+            dataset,
+            metric=metric,
+            url=primary,
+            port=port,
+            grpc_port=grpc_port,
+            prefer_grpc=prefer_grpc,
+            collection_name=collection_name,
+            m=m,
+            ef=ef,
+            batch_size=batch_size,
+            params=params,
+        )
+
+    def _initialize_collection(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
+        """Helper method to initialize collection."""
+        if self.client.collection_exists(collection_name=self.collection_name):
             logger.info("Deleted existing collection")
-            self.client.delete_collection(collection_name=collection_name)
+            self.client.delete_collection(collection_name=self.collection_name)
 
         logger.patch(lambda r: r.update(function="constructor")).info(
-            f"Creating collection {collection_name} with {self.shard_number} shards"
+            f"Creating collection {self.collection_name} with {self.shard_number} shards"
         )
 
-        qdrant_index_params = models.HnswConfigDiff(
-            m=self.m,
-            ef_construct=self.ef,
-            max_indexing_threads=0,
-            on_disk=False,
-        )
+        vectors_config = self._get_vectors_config()
+        # disable indexing by setting m=0 until dataset upload is complete
+        index_params = self._get_index_params(m=0)
 
         self.client.create_collection(
-            collection_name=collection_name,
-            vectors_config=models.VectorParams(
-                size=self.dim,
-                distance=self._translate_metric(metric),
-                hnsw_config=qdrant_index_params,
-            ),
+            collection_name=self.collection_name,
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
             shard_number=self.shard_number,
             replication_factor=self.replication_factor,
             write_consistency_factor=self.write_consistency_factor,
         )
 
-        for batch in self._batched(dataset, batch_size):
-            ids = [point.pop("id") for point in batch]
-            vectors = [point.pop("embedding") for point in batch]
-
-            self.client.upsert(
-                collection_name=collection_name,
-                points=models.Batch(
-                    ids=ids,
-                    vectors=vectors,
-                    payloads=batch,
-                ),
-            )
+        self._upload_dataset_in_batches(dataset, batch_size)
 
         num_points_in_db = self.client.count(
-            collection_name=collection_name,
+            collection_name=self.collection_name,
             exact=True,
         ).count
         logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
+
+        logger.info("Waiting for indexing to complete")
+        self.wait_for_index_ready(self.collection_name)
+        logger.info("Indexing complete!")
 
     @staticmethod
     def _resolve_node_urls(
@@ -358,7 +342,7 @@ class QdrantCluster(Qdrant):
         while time.monotonic() < deadline:
             try:
                 response = requests.get(health_url, timeout=3.0)
-                if response.status_code == HTTP_STATUS_OK:
+                if response.status_code == requests.codes.ok:
                     return
             except requests.RequestException:
                 pass
@@ -381,7 +365,7 @@ class QdrantCluster(Qdrant):
             return
 
         for name in container_names:
-            _log_single_container_tail(docker_cmd=docker_cmd, container_name=name)
+            log_single_container_tail(docker_cmd=docker_cmd, container_name=name)
 
     def stats(self) -> dict[str, object]:
         """Return cluster-aware index statistics."""

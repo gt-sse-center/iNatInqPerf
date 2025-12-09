@@ -37,7 +37,8 @@ class Weaviate(VectorDatabase):
         metric: Metric,
         index_type: WeaviateIndexType,
         url: str = "http://localhost",
-        port: str = "8080",
+        port: int = 8080,
+        grpc_port: int = 50051,
         collection_name: str = "collection_name",
         batch_size: int = 1000,
         **params: object,  # noqa: ARG002
@@ -47,7 +48,6 @@ class Weaviate(VectorDatabase):
 
         self.collection_name = collection_name
 
-        grpc_port = 50051
         connection_params = ConnectionParams.from_url(url=f"{url}:{port}", grpc_port=grpc_port)
         object.__setattr__(connection_params, "grpc_port", grpc_port)
         self.client = weaviate.WeaviateClient(

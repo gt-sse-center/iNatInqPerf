@@ -184,11 +184,9 @@ def test_search(config_yaml, data_path, caplog):
 
     benchmarker.search(dataset, vectordb)
 
-    # assert "faiss" in caplog.text
     # The configured index type drives the log message; assert against the configured value.
     expected_index_type = benchmarker.cfg.vectordb.params.index_type.upper()
     assert expected_index_type in caplog.text
-    # assert "recall@k" in caplog.text
 
 
 def test_update(data_path, config_yaml, benchmark_module):

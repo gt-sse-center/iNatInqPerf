@@ -3,7 +3,7 @@
 from docker.errors import APIError
 import pytest
 
-from inatinqperf.benchmark.container import container_context
+from inatinqperf.container import container_context
 
 
 def _run_container_config(config, expected_count):

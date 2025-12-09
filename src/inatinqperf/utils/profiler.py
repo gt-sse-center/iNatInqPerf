@@ -14,7 +14,7 @@ import psutil
 from loguru import logger
 from pydantic import ValidationError
 
-from inatinqperf.benchmark.configuration import ContainerConfig
+from inatinqperf.configuration import ContainerConfig
 
 try:  # pragma: no cover - import guard only
     import docker

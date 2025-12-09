@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from inatinqperf.benchmark.configuration import ContainerConfig
+from inatinqperf.configuration import ContainerConfig
 from inatinqperf.utils import profiler
 
 

@@ -12,8 +12,8 @@ from loguru import logger
 from tqdm import tqdm
 
 from inatinqperf.adaptors import VECTORDBS, DataPoint, Faiss, Query, SearchResult, VectorDatabase
-from inatinqperf.benchmark.configuration import Config
-from inatinqperf.benchmark.container import container_context
+from inatinqperf.configuration import Config
+from inatinqperf.container import container_context
 from inatinqperf.utils import (
     Profiler,
     embed_images,

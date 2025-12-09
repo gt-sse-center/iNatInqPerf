@@ -29,7 +29,7 @@ containers:
       6335: 6335
     volumes:
       - "qdrant_node1_storage:/qdrant/storage"
-      - "/Users/kbhardwaj6/SSE/iNatInqPerf/configs/qdrant/cluster-node-1.yaml:/qdrant/config/cluster.yaml:ro"
+      - "configs/qdrant/cluster-node-1.yaml:/qdrant/config/cluster.yaml:ro"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
       interval: 3 * 10**9
@@ -53,7 +53,7 @@ containers:
       6335: 6435
     volumes:
       - "qdrant_node2_storage:/qdrant/storage"
-      - "/Users/kbhardwaj6/SSE/iNatInqPerf/configs/qdrant/cluster-node-2.yaml:/qdrant/config/cluster.yaml:ro"
+      - "configs/qdrant/cluster-node-2.yaml:/qdrant/config/cluster.yaml:ro"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
       interval: 3 * 10**9
@@ -77,7 +77,7 @@ containers:
       6335: 6535
     volumes:
       - "qdrant_node3_storage:/qdrant/storage"
-      - "/Users/kbhardwaj6/SSE/iNatInqPerf/configs/qdrant/cluster-node-3.yaml:/qdrant/config/cluster.yaml:ro"
+      - "configs/qdrant/cluster-node-3.yaml:/qdrant/config/cluster.yaml:ro"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
       interval: 3 * 10**9

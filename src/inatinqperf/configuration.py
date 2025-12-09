@@ -122,6 +122,12 @@ class ContainerConfig(BaseModel):
         # convert the model to a dictionary and store it.
         self.healthcheck = self.healthcheck.model_dump()
 
+        # Update the volumes path within containers to be relative to the current project path
+        project_dir = Path(__file__).parent.parent.parent
+        for i, volume in enumerate(self.volumes):
+            if ".yaml" in volume:
+                self.volumes[i] = str(project_dir / volume)
+
 
 class Config(BaseModel):
     """Class encapsulating benchmark configuration with data validation."""

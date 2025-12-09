@@ -1,4 +1,5 @@
 """Vector database-agnostic benchmark orchestrator."""
+# ruff: noqa: ERA001
 
 import time
 from collections.abc import Sequence
@@ -175,7 +176,7 @@ class Benchmarker:
 
         return faiss_flat_db
 
-    def search(self, dataset: Dataset, vectordb: VectorDatabase, baseline_vectordb: VectorDatabase) -> None:
+    def search(self, dataset: Dataset, vectordb: VectorDatabase) -> None:
         """Profile search and compute recall@K vs exact baseline."""
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
@@ -199,13 +200,13 @@ class Benchmarker:
         q = embed_text(queries, model_id)
         logger.info("Embedded all queries")
 
-        logger.info("Performing search on baseline")
-        with Profiler("search-baseline-FaissFlat", containers=self.container_configs) as p:
-            i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
-            for i in tqdm(range(q.shape[0])):
-                base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
-                padded = _ids_to_fixed_array(base_results, topk)
-                i0[i] = padded
+        # logger.info("Performing search on baseline")
+        # with Profiler("search-baseline-FaissFlat", containers=self.container_configs) as p:
+        #     i0 = np.full((q.shape[0], topk), -1.0, dtype=float)
+        #     for i in tqdm(range(q.shape[0])):
+        #         base_results = baseline_vectordb.search(Query(q[i]), topk)  # exact
+        #         padded = _ids_to_fixed_array(base_results, topk)
+        #         i0[i] = padded
 
         # search + profile
         logger.info(f"Performing search on {self.cfg.vectordb.type}")
@@ -218,23 +219,23 @@ class Benchmarker:
 
             p.sample()
 
-        logger.info("recall@K (compare last retrieved to baseline per query")
-        # For simplicity compute approximate on whole Q at once:
-        i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
-        for i in tqdm(range(q.shape[0])):
-            results = vectordb.search(Query(q[i]), topk, **params.to_dict())
-            padded = _ids_to_fixed_array(results, topk)
-            i1[i] = padded
-        rec = recall_at_k(i1, i0, topk)
+        # logger.info("recall@K (compare last retrieved to baseline per query")
+        # # For simplicity compute approximate on whole Q at once:
+        # i1 = np.full((q.shape[0], topk), -1.0, dtype=float)
+        # for i in tqdm(range(q.shape[0])):
+        #     results = vectordb.search(Query(q[i]), topk, **params.to_dict())
+        #     padded = _ids_to_fixed_array(results, topk)
+        #     i1[i] = padded
+        # rec = recall_at_k(i1, i0, topk)
 
         stats = {
             "vectordb": self.cfg.vectordb.type,
             "index_type": self.cfg.vectordb.params.index_type,
             "topk": topk,
             "lat_ms_avg": float(np.mean(latencies)),
-            "lat_ms_p50": float(np.percentile(latencies, 50)),
-            "lat_ms_p95": float(np.percentile(latencies, 95)),
-            "recall@k": rec,
+            # "lat_ms_p50": float(np.percentile(latencies, 50)),
+            # "lat_ms_p95": float(np.percentile(latencies, 95)),
+            # "recall@k": rec,
             # Use dataset length directly to avoid materialising the embeddings again.
             "ntotal": len(dataset),
         }
@@ -286,12 +287,10 @@ class Benchmarker:
         self,
         dataset: Dataset,
         vectordb: VectorDatabase,
-        baseline_vectordb: VectorDatabase,
     ) -> None:
         """Run update workflow then search again to capture post-update performance."""
         self.update(dataset, vectordb)
-        self.update(dataset, baseline_vectordb)
-        self.search(dataset, vectordb, baseline_vectordb)
+        self.search(dataset, vectordb)
 
     def run(self) -> None:
         """Run end-to-end benchmark with all steps."""
@@ -305,16 +304,16 @@ class Benchmarker:
 
         with container_context(self.cfg):
             # Build baseline vector database
-            baseline_vectordb = self.build_baseline(dataset)
+            # baseline_vectordb = self.build_baseline(dataset)
 
             # Build specified vector database
             vectordb = self.build(dataset)
 
             # Perform search
-            self.search(dataset, vectordb, baseline_vectordb)
+            self.search(dataset, vectordb)
 
             # Update operations followed by search to measure impact
-            self.update_and_search(dataset, vectordb, baseline_vectordb)
+            self.update_and_search(dataset, vectordb)
 
 
 def ensure_dir(p: Path) -> Path:

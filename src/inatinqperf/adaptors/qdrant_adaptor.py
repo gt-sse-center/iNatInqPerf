@@ -3,10 +3,10 @@
 import subprocess
 import time
 from collections.abc import Generator, Sequence
-from itertools import islice
 from shutil import which
 from urllib.parse import urlparse
 
+import numpy as np
 import requests
 from loguru import logger
 from qdrant_client import QdrantClient, models

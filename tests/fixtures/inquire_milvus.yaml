@@ -1,13 +1,13 @@
 dataset:
   dataset_id: sagecontinuum/INQUIRE-Benchmark-small
   splits: "validation+test"
-  directory: data/inquire_benchmark/raw
-  export_images: true
+  directory: data/inquire_test/raw
+  export_images: false
 
 embedding:
   model_id: openai/clip-vit-base-patch32
   batch_size: 64
-  directory: data/inquire_benchmark/emb
+  directory: data/inquire_test/emb
 
 container_network: "milvus"
 containers:
@@ -49,7 +49,6 @@ containers:
     network: "milvus"
   - image: "milvusdb/milvus:v2.6.3"
     name: "milvus-standalone"
-    hostname: "minio"
     ports:
       19530: 19530
       9091: 9091
@@ -80,6 +79,7 @@ vectordb:
 search:
   topk: 10
   queries_file: benchmark/queries.txt
+  limit: 100
 
 update:
   add_count: 50

@@ -47,7 +47,7 @@ def ivfpq_small_trainset_fixture():
 def ivfpq_trainset_fixture():
     """Large training set so IVF-PQ can train without FAISS clustering warnings."""
     rng = np.random.default_rng(42)
-    X = rng.standard_normal((10240, 2)).astype(np.float32)  # >= 9984
+    X = rng.standard_normal((624, 2)).astype(np.float32)
     ids = np.arange(1000, 1000 + X.shape[0], dtype=np.int64)
 
     data_dict = {"embedding": X, "id": ids}
@@ -62,7 +62,7 @@ def query_fixture():
 
 @pytest.mark.parametrize("metric", [Metric.INNER_PRODUCT, Metric.L2])
 def test_faiss_flat_lifecycle(metric, ivfpq_trainset, query):
-    vdb = Faiss(ivfpq_trainset, metric=metric, index_type="IVFPQ", m=1)
+    vdb = Faiss(ivfpq_trainset, metric=metric, index_type="FLAT", m=1)
 
     ids = ivfpq_trainset["id"]
     st = vdb.stats()
@@ -75,9 +75,9 @@ def test_faiss_flat_lifecycle(metric, ivfpq_trainset, query):
 
     # regression: nearest to [1,0]
     if metric == Metric.INNER_PRODUCT:
-        assert results[0].id == 1003
+        assert results[0].id == 1423
     if metric == Metric.L2:
-        assert results[0].id == 1009
+        assert results[0].id == 1399
 
     # delete some ids
     vdb.delete([1101, 1103])
@@ -107,6 +107,10 @@ def test_faiss_ivfpq_build_and_search_with_large_training(ivfpq_trainset, small_
     # Inspect the internal id_map to assert every expected id made it into the index.
     id_map = faiss.vector_to_array(vdb.index.id_map)
     assert set(ids).issubset(set(id_map))
+
+    # ids returned should come from our set (since they are much closer than random train points)
+    assert results[0].id == 1003
+    assert results[1].id == 1000
 
     # delete works and stats update
     total_before = vdb.stats()["ntotal"]

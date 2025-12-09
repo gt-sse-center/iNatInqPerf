@@ -191,6 +191,11 @@ class Benchmarker:
             queries_file = Path(__file__).resolve().parent.parent / self.cfg.search.queries_file
             queries = [q.strip() for q in queries_file.read_text(encoding="utf-8").splitlines() if q.strip()]
 
+        # Limit the queries
+        # If limit is negative, use the full query set
+        limit = len(queries) if self.cfg.search.limit < 0 else self.cfg.search.limit
+        queries = queries[:limit]
+
         q = embed_text(queries, model_id)
         logger.info("Embedded all queries")
 

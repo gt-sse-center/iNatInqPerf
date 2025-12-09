@@ -318,10 +318,10 @@ class Benchmarker:
             vectordb = self.build(dataset)
 
             # Perform search
-            self.search(dataset, vectordb)
+            self.search(dataset, vectordb, baseline_vectordb)
 
             # Update operations followed by search to measure impact
-            self.update_and_search(dataset, vectordb)
+            self.update_and_search(dataset, vectordb, baseline_vectordb)
 
 
 def ensure_dir(p: Path) -> Path:

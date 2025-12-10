@@ -1,5 +1,4 @@
 """Vector database-agnostic benchmark orchestrator."""
-# ruff: noqa: ERA001
 
 import time
 from collections.abc import Sequence

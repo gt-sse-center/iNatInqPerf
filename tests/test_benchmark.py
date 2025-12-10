@@ -9,7 +9,7 @@ from inatinqperf import adaptors
 from inatinqperf.adaptors.base import SearchResult
 from inatinqperf.adaptors.enums import Metric
 from inatinqperf.benchmark import Benchmarker, benchmark
-from inatinqperf.benchmark.configuration import VectorDatabaseParams
+from inatinqperf.configuration import VectorDatabaseParams
 
 
 @pytest.fixture(name="data_path", scope="session")

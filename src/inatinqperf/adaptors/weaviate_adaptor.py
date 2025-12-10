@@ -6,6 +6,7 @@ Docs can be found here:
 """
 
 from collections.abc import Sequence
+from urllib.parse import urlparse
 
 import weaviate
 from datasets import Dataset as HuggingFaceDataset
@@ -36,7 +37,8 @@ class Weaviate(VectorDatabase):
         metric: Metric,
         index_type: WeaviateIndexType,
         url: str = "http://localhost",
-        port: str = "8080",
+        port: int = 8080,
+        grpc_port: int = 50051,
         collection_name: str = "collection_name",
         batch_size: int = 1000,
         **params: object,  # noqa: ARG002
@@ -46,8 +48,10 @@ class Weaviate(VectorDatabase):
 
         self.collection_name = collection_name
 
+        connection_params = ConnectionParams.from_url(url=f"{url}:{port}", grpc_port=grpc_port)
+        object.__setattr__(connection_params, "grpc_port", grpc_port)
         self.client = weaviate.WeaviateClient(
-            connection_params=ConnectionParams.from_url(url=f"{url}:{port}", grpc_port=50051),
+            connection_params=connection_params,
             skip_init_checks=False,
         )
         self.client.connect()
@@ -192,4 +196,127 @@ class Weaviate(VectorDatabase):
     def close(self) -> None:
         """Close database connection."""
         if hasattr(self, "client") and self.client:
-            self.client.close()
+            client_close = getattr(self.client, "close", None)
+            if callable(client_close):
+                client_close()
+
+
+class WeaviateCluster(Weaviate):
+    """Adaptor for running benchmarks against a multi-node Weaviate deployment."""
+
+    @logger.catch(reraise=True)
+    def __init__(  # noqa: PLR0913
+        self,
+        dataset: HuggingFaceDataset,
+        metric: Metric,
+        index_type: WeaviateIndexType,
+        url: str = "http://localhost",
+        port: str = "8080",
+        node_urls: Sequence[str] | None = None,
+        shard_count: int | None = None,
+        replication_factor: int | None = None,
+        virtual_per_physical: int | None = None,
+        grpc_port: str | int | None = None,
+        collection_name: str = "collection_name",
+        batch_size: int = 1000,
+        **params: object,  # noqa: ARG002
+    ) -> None:
+        """Initialise the adaptor for a sharded Weaviate cluster."""
+        VectorDatabase.__init__(self, dataset=dataset, metric=metric)
+
+        if replication_factor is not None and (shard_count is not None or virtual_per_physical is not None):
+            msg = "WeaviateCluster does not support configuring sharding and replication at the same time."
+            raise ValueError(msg)
+
+        self.collection_name = collection_name
+        self.node_urls = self._resolve_node_urls(node_urls, url, port)
+        self.shard_count = shard_count
+        self.replication_factor = replication_factor
+        self.virtual_per_physical = virtual_per_physical
+
+        grpc = int(grpc_port) if grpc_port is not None else 50051
+        connection_params = ConnectionParams.from_url(url=self.node_urls[0], grpc_port=grpc)
+        object.__setattr__(connection_params, "grpc_port", grpc)
+        self.client = weaviate.WeaviateClient(
+            connection_params=connection_params,
+            skip_init_checks=False,
+        )
+        self.client.connect()
+
+        if self.client.collections.exists(self.collection_name):
+            self.client.collections.delete(self.collection_name)
+
+        index_type_func = self._get_index_type(WeaviateIndexType(index_type))
+
+        sharding_config = None
+        if shard_count is not None or virtual_per_physical is not None:
+            sharding_config = Configure.sharding(
+                desired_count=shard_count,
+                virtual_per_physical=virtual_per_physical,
+            )
+
+        replication_config = None
+        if replication_factor is not None:
+            replication_config = Configure.replication(factor=replication_factor)
+
+        self.client.collections.create(
+            self.collection_name,
+            vector_config=Configure.Vectors.self_provided(
+                vector_index_config=index_type_func(distance_metric=self._translate_metric(metric)),
+            ),
+            properties=[
+                Property(
+                    name="dataset_id",
+                    data_type=DataType.INT,
+                    description="The original ID of this data point in the dataset",
+                )
+            ],
+            sharding_config=sharding_config,
+            replication_config=replication_config,
+        )
+
+        self._upload_dataset(dataset, batch_size)
+
+    @staticmethod
+    def _resolve_node_urls(
+        node_urls: Sequence[str] | None,
+        url: str,
+        port: str,
+    ) -> list[str]:
+        """Normalise node URLs ensuring scheme + port are always present."""
+        if node_urls:
+            resolved = [WeaviateCluster._normalise_endpoint(raw, default_port=port) for raw in node_urls]
+        else:
+            resolved = [WeaviateCluster._normalise_endpoint(url, default_port=port)]
+
+        return resolved
+
+    @staticmethod
+    def _normalise_endpoint(raw: str, default_port: str) -> str:
+        """Return endpoint with scheme and explicit port."""
+        if "://" not in raw:
+            raw = f"http://{raw}"
+
+        parsed = urlparse(raw)
+        scheme = parsed.scheme or "http"
+        host = parsed.hostname
+        port = parsed.port or int(default_port)
+
+        if host is None:
+            msg = f"Invalid Weaviate node endpoint '{raw}'"
+            raise ValueError(msg)
+
+        return f"{scheme}://{host}:{port}"
+
+    def stats(self) -> dict[str, object]:
+        """Return cluster stats, including the configured topology."""
+        stats = super().stats()
+        stats.update(
+            {
+                "nodes": self.node_urls,
+                "shard_count": self.shard_count,
+                "replication_factor": self.replication_factor,
+                "virtual_per_physical": self.virtual_per_physical,
+            }
+        )
+        return stats

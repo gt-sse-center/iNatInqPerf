@@ -2,8 +2,11 @@
 
 import time
 from collections.abc import Generator, Sequence
+from shutil import which
+from urllib.parse import urlparse
 
 import numpy as np
+import requests
 from loguru import logger
 from qdrant_client import QdrantClient, models
 from qdrant_client.models import Distance, PointStruct
@@ -11,6 +14,7 @@ from tqdm import tqdm
 
 from inatinqperf.adaptors.base import DataPoint, HuggingFaceDataset, Query, SearchResult, VectorDatabase
 from inatinqperf.adaptors.enums import Metric
+from inatinqperf.container import log_single_container_tail
 
 
 class Qdrant(VectorDatabase):
@@ -25,8 +29,11 @@ class Qdrant(VectorDatabase):
         self,
         dataset: HuggingFaceDataset,
         metric: Metric,
+        *,
         url: str = "localhost",
-        port: str = "6333",
+        port: int = 6333,
+        grpc_port: int = 6334,
+        prefer_grpc: bool = True,
         collection_name: str = "default_collection",
         m: int = 32,
         ef: int = 128,
@@ -38,7 +45,8 @@ class Qdrant(VectorDatabase):
         self.client = QdrantClient(
             url=url,
             port=port,
-            prefer_grpc=True,  # Use gRPC since it is faster
+            grpc_port=grpc_port,
+            prefer_grpc=prefer_grpc,  # Use gRPC since it is faster
             timeout=10,  # Extend the timeout to 10 seconds
         )
         self.collection_name = collection_name
@@ -47,34 +55,27 @@ class Qdrant(VectorDatabase):
         # The ef value used during collection construction
         self.ef = ef
 
-        if self.client.collection_exists(collection_name=collection_name):
-            logger.info("Deleted existing collection")
-            self.client.delete_collection(collection_name=collection_name)
+        self._initialize_collection(dataset, batch_size)
 
-        logger.patch(lambda r: r.update(function="constructor")).info(
-            f"Creating collection {collection_name}"
-        )
-
-        vectors_config = models.VectorParams(
+    def _get_vectors_config(self) -> models.VectorParams:
+        """Get the Qdrant VectorParams config."""
+        return models.VectorParams(
             size=self.dim,
-            distance=self._translate_metric(metric),
+            distance=self._translate_metric(self.metric),
             on_disk=True,  # save to disk immediately
         )
 
-        index_params = models.HnswConfigDiff(
-            m=0,  # disable indexing until dataset upload is complete
-            ef_construct=ef,
+    def _get_index_params(self, m: int) -> models.HnswConfigDiff:
+        """Get the Qdrant indexing config."""
+        return models.HnswConfigDiff(
+            m=m,
+            ef_construct=self.ef,
             max_indexing_threads=0,
             on_disk=True,  # Store index on disk
         )
 
-        self.client.create_collection(
-            collection_name=collection_name,
-            vectors_config=vectors_config,
-            hnsw_config=index_params,
-            shard_number=4,  # reasonable default as per qdrant docs
-        )
-
+    def _upload_dataset_in_batches(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
+        """Upload `dataset` in batches of size `batch_size`."""
         # Batch insert dataset
         num_batches = int(np.ceil(len(dataset) / batch_size))
         for batch in tqdm(dataset.iter(batch_size=batch_size), total=num_batches):
@@ -82,28 +83,51 @@ class Qdrant(VectorDatabase):
             vectors = batch["embedding"]
 
             self.client.upsert(
-                collection_name=collection_name,
+                collection_name=self.collection_name,
                 points=models.Batch(
                     ids=ids,
                     vectors=vectors,
                 ),
             )
 
+    def _initialize_collection(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
+        """Helper method to initialize collection."""
+        if self.client.collection_exists(collection_name=self.collection_name):
+            logger.info("Deleted existing collection")
+            self.client.delete_collection(collection_name=self.collection_name)
+
+        logger.patch(lambda r: r.update(function="constructor")).info(
+            f"Creating collection {self.collection_name}"
+        )
+
+        vectors_config = self._get_vectors_config()
+        # disable indexing by setting m=0 until dataset upload is complete
+        index_params = self._get_index_params(m=0)
+
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
+            shard_number=4,  # reasonable default as per qdrant docs
+        )
+
+        self._upload_dataset_in_batches(dataset, batch_size)
+
         # Set the indexing params
         self.client.update_collection(
-            collection_name=collection_name,
-            hnsw_config=models.HnswConfigDiff(m=m),
+            collection_name=self.collection_name,
+            hnsw_config=models.HnswConfigDiff(m=self.m),
         )
 
         # Log the number of point uploaded
         num_points_in_db = self.client.count(
-            collection_name=collection_name,
+            collection_name=self.collection_name,
             exact=True,
         ).count
         logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
 
         logger.info("Waiting for indexing to complete")
-        self.wait_for_index_ready(collection_name)
+        self.wait_for_index_ready(self.collection_name)
         logger.info("Indexing complete!")
 
     @staticmethod
@@ -191,4 +215,183 @@ class Qdrant(VectorDatabase):
     def close(self) -> None:
         """Close database connection."""
         if hasattr(self, "client") and self.client:
-            self.client.close()
+            client_close = getattr(self.client, "close", None)
+            if callable(client_close):
+                client_close()
+
+
+class QdrantCluster(Qdrant):
+    """Adaptor for a sharded/replicated Qdrant cluster."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        dataset: HuggingFaceDataset,
+        metric: Metric,
+        *,
+        url: str = "localhost",
+        port: int = 6333,
+        grpc_port: int = 6334,
+        prefer_grpc: bool = False,
+        collection_name: str = "default_collection",
+        m: int = 32,
+        ef: int = 128,
+        batch_size: int = 1000,
+        node_urls: Sequence[str] | None = None,
+        container_names: Sequence[str] | None = None,
+        shard_number: int = 3,
+        replication_factor: int = 1,
+        write_consistency_factor: int | None = None,
+        startup_timeout: float = 60.0,
+        **params,
+    ) -> None:
+        self.node_urls = self._resolve_node_urls(node_urls, url, port)
+        self.container_names = list(container_names) if container_names else None
+        self.shard_number = shard_number
+        self.replication_factor = replication_factor
+        self.write_consistency_factor = write_consistency_factor
+
+        primary = self.node_urls[0]
+        self._wait_for_startup(primary, timeout=startup_timeout, container_names=self.container_names)
+
+        super().__init__(
+            dataset,
+            metric=metric,
+            url=primary,
+            port=port,
+            grpc_port=grpc_port,
+            prefer_grpc=prefer_grpc,
+            collection_name=collection_name,
+            m=m,
+            ef=ef,
+            batch_size=batch_size,
+            params=params,
+        )
+
+    def _initialize_collection(self, dataset: HuggingFaceDataset, batch_size: int) -> None:
+        """Helper method to initialize collection."""
+        if self.client.collection_exists(collection_name=self.collection_name):
+            logger.info("Deleted existing collection")
+            self.client.delete_collection(collection_name=self.collection_name)
+
+        logger.patch(lambda r: r.update(function="constructor")).info(
+            f"Creating collection {self.collection_name} with {self.shard_number} shards"
+        )
+
+        vectors_config = self._get_vectors_config()
+        # disable indexing by setting m=0 until dataset upload is complete
+        index_params = self._get_index_params(m=0)
+
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=vectors_config,
+            hnsw_config=index_params,
+            shard_number=self.shard_number,
+            replication_factor=self.replication_factor,
+            write_consistency_factor=self.write_consistency_factor,
+        )
+
+        self._upload_dataset_in_batches(dataset, batch_size)
+
+        num_points_in_db = self.client.count(
+            collection_name=self.collection_name,
+            exact=True,
+        ).count
+        logger.info(f"Number of points in Qdrant database: {num_points_in_db}")
+
+        logger.info("Waiting for indexing to complete")
+        self.wait_for_index_ready(self.collection_name)
+        logger.info("Indexing complete!")
+
+    @staticmethod
+    def _resolve_node_urls(
+        node_urls: Sequence[str] | None,
+        default_url: str,
+        default_port: str,
+    ) -> list[str]:
+        if node_urls:
+            return [QdrantCluster._normalise_endpoint(raw, default_port) for raw in node_urls]
+        return [QdrantCluster._normalise_endpoint(f"{default_url}:{default_port}", default_port)]
+
+    @staticmethod
+    def _normalise_endpoint(endpoint: str, default_port: str) -> str:
+        if "://" not in endpoint:
+            endpoint = f"http://{endpoint}"
+
+        parsed = urlparse(endpoint)
+        scheme = parsed.scheme or "http"
+        host = parsed.hostname
+        port = parsed.port or int(default_port)
+
+        if host is None:
+            msg = f"Invalid Qdrant endpoint '{endpoint}'"
+            raise ValueError(msg)
+
+        return f"{scheme}://{host}:{port}"
+
+    @staticmethod
+    def _wait_for_startup(
+        endpoint: str,
+        timeout: float,
+        container_names: Sequence[str] | None = None,
+    ) -> None:
+        """Poll the node health endpoint until it becomes reachable."""
+        health_url = endpoint.rstrip("/") + "/healthz"
+        deadline = time.monotonic() + timeout
+        next_log = time.monotonic()
+
+        while time.monotonic() < deadline:
+            try:
+                response = requests.get(health_url, timeout=3.0)
+                if response.status_code == requests.codes.ok:
+                    return
+            except requests.RequestException:
+                pass
+
+            if container_names and time.monotonic() >= next_log:
+                QdrantCluster._log_container_tails(container_names)
+                next_log = time.monotonic() + 5.0
+
+            time.sleep(1.0)
+
+        msg = f"Timed out waiting for Qdrant node '{endpoint}' to become ready"
+        raise TimeoutError(msg)
+
+    @staticmethod
+    def _log_container_tails(container_names: Sequence[str]) -> None:
+        """Dump the tail of docker logs for the configured containers."""
+        docker_cmd = which("docker")
+        if docker_cmd is None:
+            logger.warning("Docker binary not found; cannot fetch container logs")
+            return
+
+        for name in container_names:
+            log_single_container_tail(docker_cmd=docker_cmd, container_name=name)
+
+    def stats(self) -> dict[str, object]:
+        """Return cluster-aware index statistics."""
+        stats = super().stats()
+        stats.update(
+            {
+                "shard_number": self.shard_number,
+                "replication_factor": self.replication_factor,
+                "write_consistency_factor": self.write_consistency_factor,
+                "nodes": self.node_urls,
+            }
+        )
+        return stats
+
+    @staticmethod
+    def _batched(
+        dataset: HuggingFaceDataset,
+        batch_size: int,
+    ) -> Generator[list[dict[str, object]], None, None]:
+        """Yield dataset rows in batches, keeping payload fields for upsert."""
+        batch: list[dict[str, object]] = []
+        for row in dataset:
+            batch.append(dict(row))
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+
+        if batch:
+            yield batch

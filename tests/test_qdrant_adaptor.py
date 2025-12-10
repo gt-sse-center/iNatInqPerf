@@ -3,9 +3,16 @@
 import docker
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 from inatinqperf.adaptors.enums import Metric
-from inatinqperf.adaptors.qdrant_adaptor import DataPoint, Qdrant, Query, HuggingFaceDataset
+from inatinqperf.adaptors.qdrant_adaptor import (
+    DataPoint,
+    HuggingFaceDataset,
+    Qdrant,
+    QdrantCluster,
+    Query,
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -128,3 +135,83 @@ def test_delete(collection_name, vectordb, dataset, N):
 
 def test_stats(vectordb):
     assert vectordb.stats() == {"metric": "cosine", "m": 32, "ef_construct": 128}
+
+
+def test_qdrant_cluster_uses_cluster_config(monkeypatch, dataset):
+    recorded = {}
+
+    def fake_wait(self, endpoint, timeout, container_names):
+        recorded["wait_endpoint"] = endpoint
+        recorded["wait_timeout"] = timeout
+        recorded["wait_containers"] = container_names
+
+    class FakeQdrantClient:
+        def __init__(self, *, url, grpc_port, prefer_grpc, **kwargs):
+            recorded["client_kwargs"] = {
+                "url": url,
+                "grpc_port": grpc_port,
+                "prefer_grpc": prefer_grpc,
+                "extra": kwargs,
+            }
+            self.created_collection = None
+
+        def collection_exists(self, collection_name):
+            return False
+
+        def delete_collection(self, collection_name):
+            recorded["deleted"] = collection_name
+
+        def create_collection(self, **kwargs):
+            self.created_collection = kwargs
+            recorded["create_args"] = kwargs
+
+        def get_collection(self, collection_name: str):
+            class Info:
+                """Mock info class."""
+
+                def __init__(self, status, optimizer_status):
+                    self.status = status
+                    self.optimizer_status = optimizer_status
+
+            info = Info("green", "ok")
+            return info
+
+        def upsert(self, **kwargs):  # noqa: D401,ARG002
+            """Record upsert operations for inspection."""
+            recorded.setdefault("upserts", []).append(kwargs)
+
+        def count(self, **kwargs):  # noqa: D401,ARG002
+            """Return a simple namespace mimicking Qdrant count response."""
+            return SimpleNamespace(count=0)
+
+    monkeypatch.setattr("inatinqperf.adaptors.qdrant_adaptor.QdrantClient", FakeQdrantClient)
+    monkeypatch.setattr("inatinqperf.adaptors.qdrant_adaptor.QdrantCluster._wait_for_startup", fake_wait)
+
+    cluster = QdrantCluster(
+        dataset=dataset,
+        metric=Metric.COSINE,
+        url="http://primary",
+        port="7000",
+        collection_name="test_cluster",
+        node_urls=["http://node-a:1234", "http://node-b:1234"],
+        container_names=["node-a"],
+        m=11,
+        ef=55,
+        shard_number=5,
+        replication_factor=2,
+        write_consistency_factor=3,
+        grpc_port=9876,
+        prefer_grpc=True,
+        batch_size=1,
+        startup_timeout=12.5,
+    )
+
+    assert recorded["wait_endpoint"] == cluster.node_urls[0]
+    assert recorded["wait_containers"] == cluster.container_names
+    assert pytest.approx(recorded["wait_timeout"], rel=0.01) == 12.5
+    assert recorded["client_kwargs"]["grpc_port"] == 9876
+    assert recorded["client_kwargs"]["prefer_grpc"] is True
+    stats = cluster.stats()
+    assert stats["nodes"] == ["http://node-a:1234", "http://node-b:1234"]
+    assert stats["shard_number"] == 5
+    assert stats["replication_factor"] == 2

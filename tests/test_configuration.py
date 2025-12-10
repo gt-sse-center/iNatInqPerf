@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from inatinqperf.benchmark.configuration import (
+from inatinqperf.configuration import (
     Config,
     DatasetConfig,
     EmbeddingParams,

@@ -296,6 +296,10 @@ class Benchmarker:
     ) -> None:
         """Run update workflow then search again to capture post-update performance."""
         self.update(dataset, vectordb)
+        
+        if baseline_vectordb is not None:
+            self.update(dataset, baseline_vectordb)
+
         self.search(dataset, vectordb, baseline_vectordb)
 
     def run(self) -> None:

@@ -219,19 +219,20 @@ def test_update_and_search_invokes_all(monkeypatch, config_yaml, data_path):
     def fake_update(dataset, db):
         calls["update"].append(db)
 
-    def fake_search(dataset, vdb):
-        calls["search"].append((vdb))
+    def fake_search(dataset, vdb, baseline):
+        calls["search"].append((vdb, baseline))
 
     monkeypatch.setattr(benchmarker, "update", fake_update)
     monkeypatch.setattr(benchmarker, "search", fake_search)
 
     dataset = object()
     vectordb = object()
+    baseline = object()
 
-    benchmarker.update_and_search(dataset, vectordb)
+    benchmarker.update_and_search(dataset, vectordb, baseline)
 
-    assert calls["update"] == [vectordb]
-    assert calls["search"] == [(vectordb)]
+    assert calls["update"] == [vectordb, baseline]
+    assert calls["search"] == [(vectordb, baseline)]
 
 
 # ---------- Edge cases for helpers ----------

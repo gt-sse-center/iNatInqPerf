@@ -176,7 +176,9 @@ class Benchmarker:
 
         return faiss_flat_db
 
-    def search(self, dataset: Dataset, vectordb: VectorDatabase, baseline_vectordb: VectorDatabase = None) -> None:
+    def search(
+        self, dataset: Dataset, vectordb: VectorDatabase, baseline_vectordb: VectorDatabase = None
+    ) -> None:
         """Profile search and compute recall@K vs exact baseline."""
         params = self.cfg.vectordb.params
         model_id = self.cfg.embedding.model_id
@@ -296,7 +298,7 @@ class Benchmarker:
     ) -> None:
         """Run update workflow then search again to capture post-update performance."""
         self.update(dataset, vectordb)
-        
+
         if baseline_vectordb is not None:
             self.update(dataset, baseline_vectordb)
 

@@ -109,7 +109,7 @@ class Qdrant(VectorDatabase):
         )
 
         ids, vectors = self._prepare_upload_data(dataset)
-        self.client.recreate_collection(
+        self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=self._get_vectors_config(),
             hnsw_config=self._get_index_params(m=self.m),
@@ -366,7 +366,7 @@ class QdrantCluster(Qdrant):
         )
 
         ids, vectors = self._prepare_upload_data(dataset)
-        self.client.recreate_collection(
+        self.client.create_collection(
             collection_name=self.collection_name,
             vectors_config=self._get_vectors_config(),
             hnsw_config=self._get_index_params(m=self.m),

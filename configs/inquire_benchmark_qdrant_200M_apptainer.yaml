@@ -1,0 +1,35 @@
+dataset:
+  dataset_id: /storage/project/r-jyoung9-1/shared/proj-inquire/inat-open-data/200M/400M
+  splits: "validation+test"
+  directory: /storage/project/r-jyoung9-1/shared/proj-inquire/inat-open-data/200M/400M
+  export_images: false
+
+embedding:
+  model_id: openai/clip-vit-base-patch32
+  batch_size: 64
+  directory: /storage/project/r-jyoung9-1/shared/proj-inquire/inat-open-data/200M/400M
+
+containers: []
+  
+
+vectordb:
+  type: qdrant.hnsw
+  params:
+    url: localhost
+    port: "6333"
+    collection_name: benchmark_collection
+    index_type: hnsw
+    metric: cosine
+    m: 64
+    ef: 32
+    batch_size: 2048
+
+search:
+  topk: 10
+  queries_file: benchmark/inquire_queries.txt
+
+update:
+  add_count: 50
+  delete_count: 30
+
+compute_recall: false

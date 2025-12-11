@@ -108,23 +108,15 @@ class Qdrant(VectorDatabase):
             f"Creating collection {self.collection_name}"
         )
 
-        vectors_config = self._get_vectors_config()
-        # disable indexing by setting m=0 until dataset upload is complete
-        index_params = self._get_index_params(m=0)
-
-        self.client.create_collection(
+        ids, vectors = self._prepare_upload_data(dataset)
+        self.client.upload_collection(
             collection_name=self.collection_name,
-            vectors_config=vectors_config,
-            hnsw_config=index_params,
+            vectors=vectors,
+            ids=ids,
+            vectors_config=self._get_vectors_config(),
+            hnsw_config=self._get_index_params(m=self.m),
             shard_number=4,  # reasonable default as per qdrant docs
-        )
-
-        self._upload_dataset_in_batches(dataset, batch_size)
-
-        # Set the indexing params
-        self.client.update_collection(
-            collection_name=self.collection_name,
-            hnsw_config=models.HnswConfigDiff(m=self.m),
+            batch_size=batch_size,
         )
 
         # Log the number of point uploaded
@@ -228,6 +220,21 @@ class Qdrant(VectorDatabase):
         """A generator to help with creating PointStructs."""
         for data_point in data_points:
             yield PointStruct(id=data_point.id, vector=data_point.vector)
+
+    @staticmethod
+    def _prepare_upload_data(dataset: HuggingFaceDataset) -> tuple[Sequence[int], Sequence[Sequence[float]]]:
+        """Return IDs and vectors, falling back to synthetic IDs when missing."""
+        if "id" in dataset.column_names:
+            ids = dataset["id"]
+        elif "photo_id" in dataset.column_names:
+            ids = dataset["photo_id"]
+        elif "query_id" in dataset.column_names:
+            ids = dataset["query_id"]
+        else:
+            ids = list(range(len(dataset)))
+
+        vectors = dataset["embedding"]
+        return ids, vectors
 
     @staticmethod
     def _resolve_ids(batch: dict, next_id: int) -> tuple[Sequence[int], int]:
@@ -354,20 +361,18 @@ class QdrantCluster(Qdrant):
             f"Creating collection {self.collection_name} with {self.shard_number} shards"
         )
 
-        vectors_config = self._get_vectors_config()
-        # disable indexing by setting m=0 until dataset upload is complete
-        index_params = self._get_index_params(m=0)
-
-        self.client.create_collection(
+        ids, vectors = self._prepare_upload_data(dataset)
+        self.client.upload_collection(
             collection_name=self.collection_name,
-            vectors_config=vectors_config,
-            hnsw_config=index_params,
+            vectors=vectors,
+            ids=ids,
+            vectors_config=self._get_vectors_config(),
+            hnsw_config=self._get_index_params(m=self.m),
             shard_number=self.shard_number,
             replication_factor=self.replication_factor,
             write_consistency_factor=self.write_consistency_factor,
+            batch_size=batch_size,
         )
-
-        self._upload_dataset_in_batches(dataset, batch_size)
 
         num_points_in_db = self.client.count(
             collection_name=self.collection_name,

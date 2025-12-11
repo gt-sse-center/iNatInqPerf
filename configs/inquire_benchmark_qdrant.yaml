@@ -36,7 +36,7 @@ vectordb:
 
 search:
   topk: 10
-  queries_file: benchmark/queries.txt
+  queries_file: benchmark/inquire_queries.txt
 
 update:
   add_count: 50

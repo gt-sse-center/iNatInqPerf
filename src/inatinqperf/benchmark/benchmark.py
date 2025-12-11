@@ -156,13 +156,22 @@ class Benchmarker:
         """Convert a HuggingFace dataset to a list of DataPoint objects."""
 
         # TODO: add metadata info from dataset if available
+        if "id" in dataset.column_names:
+            ids = dataset["id"]
+        elif "photo_id" in dataset.column_names:
+            ids = dataset["photo_id"]
+        elif "query_id" in dataset.column_names:
+            ids = dataset["query_id"]
+        else:
+            ids = list(range(len(dataset)))
+
         return [
             DataPoint(
                 id=int(row_id),
                 vector=vector,
                 metadata={},
             )
-            for idx, (row_id, vector) in enumerate(zip(dataset["id"], dataset["embedding"], strict=True))
+            for row_id, vector in zip(ids, dataset["embedding"], strict=True)
         ]
 
     def build_baseline(self, dataset: Dataset) -> VectorDatabase:

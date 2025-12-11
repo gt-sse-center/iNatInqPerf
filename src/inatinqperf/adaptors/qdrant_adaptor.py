@@ -109,14 +109,18 @@ class Qdrant(VectorDatabase):
         )
 
         ids, vectors = self._prepare_upload_data(dataset)
+        self.client.recreate_collection(
+            collection_name=self.collection_name,
+            vectors_config=self._get_vectors_config(),
+            hnsw_config=self._get_index_params(m=self.m),
+            shard_number=4,  # reasonable default as per qdrant docs
+        )
         self.client.upload_collection(
             collection_name=self.collection_name,
             vectors=vectors,
             ids=ids,
-            vectors_config=self._get_vectors_config(),
-            hnsw_config=self._get_index_params(m=self.m),
-            shard_number=4,  # reasonable default as per qdrant docs
             batch_size=batch_size,
+            wait=True,
         )
 
         # Log the number of point uploaded
@@ -362,16 +366,20 @@ class QdrantCluster(Qdrant):
         )
 
         ids, vectors = self._prepare_upload_data(dataset)
-        self.client.upload_collection(
+        self.client.recreate_collection(
             collection_name=self.collection_name,
-            vectors=vectors,
-            ids=ids,
             vectors_config=self._get_vectors_config(),
             hnsw_config=self._get_index_params(m=self.m),
             shard_number=self.shard_number,
             replication_factor=self.replication_factor,
             write_consistency_factor=self.write_consistency_factor,
+        )
+        self.client.upload_collection(
+            collection_name=self.collection_name,
+            vectors=vectors,
+            ids=ids,
             batch_size=batch_size,
+            wait=True,
         )
 
         num_points_in_db = self.client.count(
